@@ -1,0 +1,30 @@
+# --- Python Basics ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual Environments ---
+venv/
+.venv/
+env/
+
+# --- Environment Variables (CRITICAL) ---
+# Ignores your API keys file
+.env
+
+# --- Database & Local Data ---
+# Ignores your contact list and WhatsApp database
+*.db
+contact.db
+PyWhatKit_DB.txt
+
+# --- Voice Security ---
+# Ignores your biometric voice key
+my_voice.wav
+
+# --- OS Generated Files ---
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
