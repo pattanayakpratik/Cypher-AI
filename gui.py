@@ -403,6 +403,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sig_log.connect(self.terminal.log)
         self.sig_close.connect(self.close_safely)
         self.sig_state.connect(self.core.set_state)
+
+        # esc
+        self.esc_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Esc"), self)
+        self.esc_shortcut.activated.connect(main.stopSpeaking)
         
         self.oldPos = self.pos()
         self.sys_timer = QTimer(self)
@@ -466,6 +470,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def start_system(self):
         if self.core.is_active:
             return
+            
+        # FIX 1: Prevent starting a new thread if the old one is still dying
+        if hasattr(self, 'ai_thread') and self.ai_thread and self.ai_thread.is_alive():
+            self.terminal.log("Waiting for background tasks to terminate...")
+            return
+
         self.core.is_active = True
         self.btn_action.setText("TERMINATE SYSTEM")
         self.btn_action.setStyleSheet(f"""
@@ -476,10 +486,13 @@ class MainWindow(QtWidgets.QMainWindow):
         main.set_ui_state_callback(self.update_state_threadsafe)
         
         self.update_log_threadsafe("Initializing Neural Network...")
-        t = threading.Thread(target=self.run_ai)
-        t.daemon = True
-        t.start()
         
+        # FIX 2: Save the thread to 'self.ai_thread' so we can track it
+        self.ai_thread = threading.Thread(target=self.run_ai)
+        self.ai_thread.daemon = True
+        self.ai_thread.start()
+
+
     def stop_system(self):
         main.stop_execution()
         self.core.is_active = False
@@ -488,23 +501,29 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_action.setStyleSheet(f"""
             background-color: rgba(0, 217, 246, 0.1); color: {COLOR_ACCENT}; border: 2px solid {COLOR_ACCENT}; font-family: '{self.tech_font}'; font-size: 24px; letter-spacing: 2px; border-bottom-left-radius: 15px; border-bottom-right-radius: 15px; font-style: italic;
         """)
-        self.update_log_threadsafe("System Halted.")
+        # FIX 3: Emit directly so it bypasses the shields we are about to build
+        self.terminal.log("System Halted.")
 
     def run_ai(self):
         try:
             main.check_env_variable()
+            main.load_memory()
             main.activateAssistant()
         except Exception as e:
             self.update_log_threadsafe(f"CRITICAL ERROR: {e}")
 
     def update_log_threadsafe(self, text):
-        self.sig_log.emit(text)
+        # FIX 4: Only allow logs to print if the system is meant to be active
+        if self.core.is_active:
+            self.sig_log.emit(text)
     
     def request_close_threadsafe(self):
         self.sig_close.emit()
     
     def update_state_threadsafe(self, state):
-        self.sig_state.emit(state)
+        # FIX 5: Prevent dying background threads from turning the UI back to "listening"
+        if self.core.is_active:
+            self.sig_state.emit(state)
     
     @pyqtSlot()
     def close_safely(self):
