@@ -897,22 +897,6 @@ def check_emails():
         print(e)
         speak("I encountered an error while accessing your inbox, Sir.")
 
-# # set alarm function
-# def setAlarm(time):
-#     try:
-#         alarm_time = datetime.strptime(time, "%H:%M").time()
-#         now = datetime.now().time()
-
-#         if alarm_time < now:
-#             speak("The specified time has already passed today. Setting the alarm for tomorrow.")
-#             alarm_time = (datetime.combine(datetime.today(), alarm_time) + timedelta(days=1)).time()
-
-#         while True:
-#             current_time = datetime.now().time()
-#             if current_time >= alarm_time:
-#                 speak("Alarm ringing, Sir!")
-#                 break
-#             time.sleep(30)  # Check every 30 seconds
 
 # weather fetch function
 def getWeather(city):
@@ -1075,6 +1059,25 @@ def check_internet_speed():
         print(e)
         return "Internet speed check failed, sir."
 
+# alarm
+def setAlarm(time):
+    try:
+        alarm_time = datetime.strptime(time, "%H:%M").time()
+        now = datetime.now().time()
+
+        if alarm_time < now:
+            speak("The specified time has already passed today. Setting the alarm for tomorrow.")
+            alarm_time = (datetime.combine(datetime.today(), alarm_time) + timedelta(days=1)).time()
+
+        while True:
+            current_time = datetime.now().time()
+            if current_time >= alarm_time:
+                speak("Alarm ringing, Sir!")
+                break
+            time.sleep(30)  # Check every 30 seconds
+    except Exception as e:
+        print(f"Alarm Error: {e}")
+        speak("I couldn't set the alarm, Sir.")
 
 def activateAssistant():
     global is_running
