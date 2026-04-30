@@ -30,6 +30,8 @@ import json
 import speedtest
 from groq import Groq
 import wikipedia
+import os 
+import requests
 
 load_dotenv()
 ui_print = print
@@ -895,24 +897,66 @@ def check_emails():
         print(e)
         speak("I encountered an error while accessing your inbox, Sir.")
 
+# # set alarm function
+# def setAlarm(time):
+#     try:
+#         alarm_time = datetime.strptime(time, "%H:%M").time()
+#         now = datetime.now().time()
+
+#         if alarm_time < now:
+#             speak("The specified time has already passed today. Setting the alarm for tomorrow.")
+#             alarm_time = (datetime.combine(datetime.today(), alarm_time) + timedelta(days=1)).time()
+
+#         while True:
+#             current_time = datetime.now().time()
+#             if current_time >= alarm_time:
+#                 speak("Alarm ringing, Sir!")
+#                 break
+#             time.sleep(30)  # Check every 30 seconds
 
 # weather fetch function
 def getWeather(city):
-    api_key = os.getenv("OPENWEATHER_KEY")
-    url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
-    headers = {"User-Agent": "MyWeatherApp/1.0"}
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        weather_info = f"City: {data['name']}. Temperature: {data['main']['temp']} °C. Weather: {data['weather'][0]['description']}. Humidity: {data['main']['humidity']} %. Wind Speed: {data['wind']['speed']} m/s."
-        print(weather_info)
-        return weather_info
-    else:
-        print("Error: Unable to fetch weather information.")
-        return "Error: Unable to fetch weather information."
+    """Fetches real-time weather data and formats it for Voice TTS."""
+    try:
+        api_key = os.getenv("OPENWEATHER_KEY")
+        
+        if not api_key:
+            return "Error: OpenWeather API key is missing from the environment variables."
+
+        url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
+        headers = {"User-Agent": "CypherVoiceAssistant/1.0"}
+        
+        response = requests.get(url, headers=headers)
+        
+        # Check if the city was found
+        if response.status_code == 404:
+            return f"I'm sorry, I couldn't find any weather data for the city {city}."
+            
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Extract variables
+            city_name = data['name']
+            temp = round(data['main']['temp']) # Round to whole number for better speech
+            description = data['weather'][0]['description']
+            humidity = data['main']['humidity']
+            wind_speed = data['wind']['speed']
+            
+            # Formatted conversationally for Microsoft Edge-TTS
+            weather_info = f"Currently in {city_name}, it is {temp} degrees Celsius with {description}. The humidity is at {humidity} percent, with a wind speed of {wind_speed} meters per second."
+            
+            return weather_info
+            
+        else:
+            return "There was an error communicating with the weather server."
+            
+    except requests.exceptions.RequestException as e:
+        # Handles no internet connection or timeout
+        return "I am currently unable to connect to the weather network. Please check your internet connection."
+    except Exception as e:
+        return "Sorry, I encountered an internal error while fetching the weather."
 
 
-# news fetch function
 def getNews():
     api = NewsDataApiClient(apikey=os.getenv("NEWS_API_KEY"))
     response = api.latest_api(country="in", language="en")
