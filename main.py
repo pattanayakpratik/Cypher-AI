@@ -18,7 +18,7 @@ import edge_tts
 import asyncio
 import pywhatkit as wb
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 import random
 import shutil
 import io
@@ -30,8 +30,7 @@ import json
 import speedtest
 from groq import Groq
 import wikipedia
-import os 
-import requests
+
 
 load_dotenv()
 ui_print = print
@@ -480,6 +479,13 @@ def speakToText(retries=3):
                 speak("I didn't catch that, Sir.")
                 wait_until_silent()
                 continue
+
+            except sr.RequestError as e:
+                print(f"Google Speech Recognition API error: {e}")
+                set_ui_state("idle")
+                speak("I'm having trouble connecting to the speech recognition service, Sir.")
+                wait_until_silent()
+                break
                 
             except Exception as e:
                 print(f"Mic Error: {e}")
@@ -1060,24 +1066,28 @@ def check_internet_speed():
         return "Internet speed check failed, sir."
 
 # alarm
-def setAlarm(time):
-    try:
-        alarm_time = datetime.strptime(time, "%H:%M").time()
-        now = datetime.now().time()
+def setAlarm(time_str):
+    def alarm_worker():
+        try:
+            now = datetime.now()
+            alarm_datetime = datetime.strptime(time_str, "%H:%M")
+            alarm_datetime = alarm_datetime.replace(
+                year=now.year, month=now.month, day=now.day
+            )
 
-        if alarm_time < now:
-            speak("The specified time has already passed today. Setting the alarm for tomorrow.")
-            alarm_time = (datetime.combine(datetime.today(), alarm_time) + timedelta(days=1)).time()
+            if alarm_datetime <= now:
+                alarm_datetime += timedelta(days=1)
 
-        while True:
-            current_time = datetime.now().time()
-            if current_time >= alarm_time:
-                speak("Alarm ringing, Sir!")
-                break
-            time.sleep(30)  # Check every 30 seconds
-    except Exception as e:
-        print(f"Alarm Error: {e}")
-        speak("I couldn't set the alarm, Sir.")
+            sleep_seconds = (alarm_datetime - datetime.now()).total_seconds()
+
+            time.sleep(sleep_seconds)
+
+            speak("Alarm ringing, Sir!")
+
+        except Exception as e:
+            print(f"Alarm Error: {e}")
+    threading.Thread(target=alarm_worker, daemon=True).start()
+
 
 def activateAssistant():
     global is_running
