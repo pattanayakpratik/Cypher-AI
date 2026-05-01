@@ -615,9 +615,14 @@ def processCommand(c):
         pyautogui.press('s')
         
     elif "shutdown" in c_lower:
-        speak("Shutting down the computer, Sir.")
-        wait_until_silent()
-        os.system("shutdown /s /t 1") 
+    speak("Are you sure you want to shut down the computer, Sir? Say yes to confirm.")
+    wait_until_silent()
+    confirmation = speakToText()
+    if "yes" in confirmation:
+        speak("Shutting down.")
+        os.system("shutdown /s /t 1")
+    else:
+        speak("Shutdown cancelled.") 
         
     elif "restart" in c_lower:
         speak("Restarting the system, Sir.")
