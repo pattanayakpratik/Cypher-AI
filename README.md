@@ -60,8 +60,8 @@ voiceAssistance/
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/YourUsername/Cypher-AI-Assistant.git
-cd Cypher-AI-Assistant
+git clone https://github.com/pattanayakpratik/Cypher-AI.git
+cd Cypher-AI
 
 ```
 
