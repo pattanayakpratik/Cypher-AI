@@ -651,7 +651,7 @@ def processCommand(c):
         wait_until_silent()
         
     elif "send message on whatsapp" in c_lower:
-        sendWhatsAppMessage()
+        threading.Thread(target=sendWhatsAppMessage, daemon=True).start()
     
     elif "add contact" in c_lower or "save contact" in c_lower or "new contact" in c_lower:
         addContact()
