@@ -10,7 +10,9 @@ import pyautogui
 import time
 from PIL import Image, ImageTk, ImageSequence
 import threading
-import pyaudio
+import sounddevice as sd
+import numpy as np
+import scipy.io.wavfile as wav
 from dotenv import load_dotenv
 import sqlite3
 from newsdataapi import NewsDataApiClient
@@ -267,6 +269,9 @@ def speak(text):
             return
 
         try:
+            if not pygame.mixer.get_init():
+                set_ui_state("idle")
+                return
             # Play using Sound object
             sound = pygame.mixer.Sound(file=target_source)
 
@@ -298,7 +303,7 @@ def speak(text):
 
 def wait_until_silent():
     if speech_thread and speech_thread.is_alive():
-        speech_thread.join()
+        speech_thread.join(timeout=10)
 
 
 def stopSpeaking():
@@ -456,42 +461,40 @@ def speak_while_thinking(prompt):
 
 def speakToText(retries=3):
     for _ in range(retries):
-        with sr.Microphone() as source:
-            # Set UI to listening ONLY when the mic actually opens
-            set_ui_state("listening") 
-            try:
-                audio = recognizer.listen(source, timeout=5, phrase_time_limit=15)
-                set_ui_state("processing")
-                
-                # MUST BE A SINGLE LANGUAGE CODE! (This is what caused the crash)
-                text = recognizer.recognize_google(audio, language="en-IN")
-                ui_print(f"USER: {text}")
-                
-                set_ui_state("idle")
-                return text
-                
-            except sr.WaitTimeoutError:
-                set_ui_state("idle")
-                continue
-                
-            except sr.UnknownValueError:
-                set_ui_state("idle")
-                speak("I didn't catch that, Sir.")
-                wait_until_silent()
-                continue
-
-            except sr.RequestError as e:
-                print(f"Google Speech Recognition API error: {e}")
-                set_ui_state("idle")
-                speak("I'm having trouble connecting to the speech recognition service, Sir.")
-                wait_until_silent()
-                break
-                
-            except Exception as e:
-                print(f"Mic Error: {e}")
-                set_ui_state("idle")
-                break
-                
+        set_ui_state("listening")
+        try:
+            # 1. Record audio using sounddevice (No PyAudio required)
+            # Records 5 seconds of audio at 16000 Hz
+            fs = 16000  
+            duration = 5  
+            print("Listening...")
+            
+            # This captures the microphone data into a numpy array
+            recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
+            sd.wait() # Wait until recording is finished
+            
+            set_ui_state("processing")
+            
+            # 2. Convert raw numpy array to SpeechRecognition AudioData
+            audio_data = sr.AudioData(recording.tobytes(), fs, 2)
+            
+            # 3. Send to Google API
+            text = recognizer.recognize_google(audio_data, language="en-IN")
+            ui_print(f"USER: {text}")
+            
+            set_ui_state("idle")
+            return text
+            
+        except sr.UnknownValueError:
+            set_ui_state("idle")
+            speak("I didn't catch that, Sir.")
+            wait_until_silent()
+            continue
+        except Exception as e:
+            print(f"Mic Error: {e}")
+            set_ui_state("idle")
+            break
+            
     set_ui_state("idle")
     return ""
 
@@ -972,14 +975,21 @@ def getNews():
 
 # whatsapp message function
 def get_whatsapp_number_from_db(name_spoken):
-    conn = sqlite3.connect("contact.db")
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT phone_number FROM contacts WHERE LOWER(name) LIKE ?",
-        ("%" + name_spoken.lower().strip() + "%",),
-    )
-    result = cursor.fetchone()
-    conn.close()
+    try:
+        conn = sqlite3.connect("contact.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT phone_number FROM contacts WHERE LOWER(name) LIKE ?",
+            ("%" + name_spoken.lower().strip() + "%",),
+        )
+        result = cursor.fetchone()
+        conn.close()
+    except sqlite3.Error as e:
+        print(f"Database Error: {e}")
+        return None
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
     if result:
         raw_number = result[0]
@@ -1017,7 +1027,7 @@ def sendWhatsAppMessage():
         speak("I didn't hear a message.")
         return
 
-    send_whatsapp_message(phone_number, message)
+    threading.Thread(target=send_whatsapp_message, args=(phone_number, message), daemon=True).start()
 
 
 def send_whatsapp_message(phone_number, message):
@@ -1099,82 +1109,74 @@ def activateAssistant():
     is_running = True
     greet()
 
-    with sr.Microphone() as source:
-        recognizer.adjust_for_ambient_noise(source, duration=0.5)
+    fs = 16000  # Sample rate
+    duration_wake = 2  # Listen for 2 seconds for wake word
+    duration_cmd = 5   # Listen for 5 seconds for command
 
-        while is_running:
-            set_ui_state("listening")
-            print("Waiting for wake word...")
-            try:
-                while speech_thread and speech_thread.is_alive():
-                    time.sleep(0.05)
-                audio = recognizer.listen(source, timeout=3, phrase_time_limit=4)
+    while is_running:
+        set_ui_state("listening")
+        print("Waiting for wake word...")
+        try:
+            while speech_thread and speech_thread.is_alive():
+                time.sleep(0.05)
+            
+            # Record using sounddevice for Wake Word
+            recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
+            sd.wait()
+            audio_data = sr.AudioData(recording.tobytes(), fs, 2)
 
-                set_ui_state("processing")
-                word = recognizer.recognize_google(audio, language="en-IN").lower()
-                print("Heard wake word:", word)
+            set_ui_state("processing")
+            word = recognizer.recognize_google(audio_data, language="en-IN").lower()
+            print("Heard:", word)
 
-                if "turn off" in word:
-                    shutdown_sequence()
-                    return
-                wake_words = ["cypher", "cipher", "saifer", "hey cypher"]
+            if "turn off" in word:
+                shutdown_sequence()
+                return
+            
+            wake_words = ["cypher", "cipher", "saifer", "hey cypher"]
 
-                if any(w in word for w in wake_words):
-                    activate_msg = [
-                        "Yes, Sir?",
-                        "At your service.",
-                        "I'm here, Sir.",
-                        "Ready, Sir.",
-                    ]
-                    if random.random() < 0.7:
-                        speak(random.choice(activate_msg))
-                    else:
-                        speak("hmm..")
-                    active = True
+            if any(w in word for w in wake_words):
+                activate_msg = ["Yes, Sir?", "At your service.", "I'm here, Sir.", "Ready, Sir."]
+                speak(random.choice(activate_msg) if random.random() < 0.7 else "hmm..")
+                wait_until_silent()
+                
+                active = True
+                while active and is_running:
+                    try:
+                        print("CYPHER Active...")
+                        set_ui_state("listening")
+                        
+                        # Record using sounddevice for Command
+                        cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
+                        sd.wait()
+                        cmd_audio = sr.AudioData(cmd_recording.tobytes(), fs, 2)
 
-                    while active and is_running:
-                        try:
-                            while speech_thread and speech_thread.is_alive():
-                                time.sleep(0.05)
+                        set_ui_state("processing")
+                        command = recognizer.recognize_google(cmd_audio, language="en-IN").lower()
+                        ui_print(f"USER: {command}")
 
-                            print("CYPHER Active...")
-                            set_ui_state("listening")
-                            audio_cmd = recognizer.listen(
-                                source, timeout=5, phrase_time_limit=15
-                            )
+                        if "stop listening" in command or "go to sleep" in command:
+                            speak("Entering standby mode.")
+                            active = False
+                        elif "turn off" in command:
+                            shutdown_sequence()
+                            return
+                        else:
+                            processCommand(command)
 
-                            set_ui_state("processing")
-                            command = recognizer.recognize_google(
-                                audio_cmd, language="en-IN"
-                            ).lower()
-                            ui_print(f"USER: {command}")
+                    except sr.UnknownValueError:
+                        set_ui_state("idle")
+                    except Exception as e:
+                        print(f"Command Error: {e}")
+                        set_ui_state("idle")
 
-                            if "stop listening" in command or "go to sleep" in command:
-                                speak("Entering standby mode.")
-                                active = False
-                            elif "turn off" in command:
-                                shutdown_sequence()
-                                return
-                            else:
-                                processCommand(command)
-
-                        except sr.WaitTimeoutError:
-                            pass
-                        except sr.UnknownValueError:
-                            pass
-                        finally:
-                            set_ui_state("idle")
-
-            except sr.WaitTimeoutError:
-                pass
-            except sr.UnknownValueError:
-                pass
-            except Exception as e:
-                print(f"Error: {e}")
-            finally:
-                if is_running:
-                    set_ui_state("idle")
-
+        except sr.UnknownValueError:
+            pass # Ignore silence/unrecognized noise while waiting for wake word
+        except Exception as e:
+            print(f"Wake Word Error: {e}")
+        finally:
+            if is_running:
+                set_ui_state("idle")
 
 if __name__ == "__main__":
     check_env_variable()
