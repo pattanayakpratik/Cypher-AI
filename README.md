@@ -127,4 +127,4 @@ python gui.py
 
 ---
 
-**Built with 💙 by [Pratik Pattanayak]**
+**Built with 💙 by [Pratik Pattanayak](mailto:mr.pratikpattanayak@gmail.com)**
