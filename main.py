@@ -697,6 +697,14 @@ def processCommand(c):
             stopSpeaking()
         else:
             shutdown_sequence()
+    elif "set alarm" in c_lower:
+        speak("At what time should I set the alarm, Sir? Please say it in HH:MM format.")
+        wait_until_silent()
+        alarm_time = speakToText()
+        alarm_time = alarm_time.replace(" ", "")
+        speak(f"Setting alarm for {alarm_time}, Sir.")
+        setAlarm(alarm_time)
+
             
     # 6. Fallback to Gemini/Groq Brain
     else:
