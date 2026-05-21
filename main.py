@@ -759,20 +759,21 @@ def shutdown_sequence():
 
 # fetching email from database
 def get_email_from_db(name_spoken):
-    conn = sqlite3.connect("contact.db")
-    cursor = conn.cursor()
-    # diverse query to handle partial matches
-    cursor.execute(
-        "SELECT email FROM email_contacts WHERE LOWER(name) LIKE ?",
-        ("%" + name_spoken.lower().strip() + "%",),
-    )
-    result = cursor.fetchone()
-    conn.close()
-    if result:
-        return result[0]
-    else:
-        speak("I couldn't find that contact in the database.")
+    try:
+        conn = sqlite3.connect("contact.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT email FROM email_contacts WHERE LOWER(name) LIKE ?",
+            ("%" + name_spoken.lower().strip() + "%",),
+        )
+        result = cursor.fetchone()
+        return result[0] if result else None
+    except sqlite3.Error as e:
+        print(f"Database Error: {e}")
         return None
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 
 # send mail function
