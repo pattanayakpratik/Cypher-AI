@@ -34,12 +34,12 @@ from groq import Groq
 import wikipedia
 import re 
 
-
 load_dotenv()
 ui_print = print
 close_callback = None
 ui_state_callback = None
 is_running = True
+
 # Global API Clients
 gemini_client = None
 groq_client = None
@@ -55,12 +55,14 @@ ai_thinking = False
 current_channel = None
 speech_lock = threading.Lock()
 
+# Alarm Flag
+alarm_event = threading.Event()
 
 # --- CONFIGURATION ---
 # Lower value = More sensitive mic (Faster pickup)
 ERROR_THRESHOLD = 300
 
-# In main.py, where you configure the recognizer:
+#Configure the recognizer:
 recognizer = sr.Recognizer()
 recognizer.energy_threshold = ERROR_THRESHOLD
 recognizer.dynamic_energy_threshold = True
@@ -69,17 +71,13 @@ recognizer.dynamic_energy_threshold = True
 # A lower value (e.g., 0.8) means it will process faster.
 recognizer.pause_threshold = 0.8  
 
-
-
 # --- NEW: DEDICATED TTS EVENT LOOP (Speed Optimization) ---
 # This creates a permanent background thread for generating audio.
 tts_loop = asyncio.new_event_loop()
 
-
 def start_tts_loop(loop):
     asyncio.set_event_loop(loop)
     loop.run_forever()
-
 
 # Start the TTS loop immediately
 t = threading.Thread(target=start_tts_loop, args=(tts_loop,), daemon=True)
@@ -87,8 +85,6 @@ t.start()
 
 # --- OPTIMIZED MIXER SETUP ---
 try:
-    # OPTIMIZATION: Updated to 24000Hz to match edge-tts native output (NeerjaNeural)
-    # This avoids internal resampling latency.
     if pygame.mixer.get_init():
         pygame.mixer.quit()
     pygame.mixer.init(frequency=24000, channels=1)
@@ -100,22 +96,18 @@ def set_ui_callback(func):
     global ui_print
     ui_print = func
 
-
 def set_close_callback(func):
     global close_callback
     close_callback = func
-
 
 def set_ui_state_callback(func):
     global ui_state_callback
     ui_state_callback = func
 
-
 def set_ui_state(state):
     """Updates the UI state (idle, listening, processing)"""
     if ui_state_callback:
         ui_state_callback(state)
-
 
 def stop_execution():
     global is_running, stop_speaking
@@ -124,7 +116,6 @@ def stop_execution():
     if pygame.mixer.get_init():
         pygame.mixer.stop()
     ui_print("System halting...")
-
 
 # function for checking environment variable
 def check_env_variable():
@@ -140,10 +131,8 @@ def check_env_variable():
     ]
     missing_keys = [key for key in required_keys if not os.getenv(key)]
     if missing_keys:
-        print(
-            f"Warning: The following environment variables are missing: {', '.join(missing_keys)}"
-        )
-        # We don't exit here to allow partial functionality, but warn user
+        print(f"Warning: The following environment variables are missing: {', '.join(missing_keys)}")
+    
     if os.getenv("GEMINI_API_KEY"):
         gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     if os.getenv("GROQ_API_KEY"):
@@ -154,18 +143,17 @@ def check_env_variable():
     init_db()
 
 def init_db():
-    """Creates the contact database and tables if they don't exist yet."""
+    """Creates the contact database and tables with UNIQUE constraints."""
     conn = sqlite3.connect("contact.db")
     cursor = conn.cursor()
-    # Create WhatsApp table
+    # Create WhatsApp table with UNIQUE name constraint
     cursor.execute('''CREATE TABLE IF NOT EXISTS contacts 
-                      (id INTEGER PRIMARY KEY, name TEXT, phone_number TEXT)''')
-    # Create Email table
+                      (id INTEGER PRIMARY KEY, name TEXT UNIQUE, phone_number TEXT)''')
+    # Create Email table with UNIQUE name constraint
     cursor.execute('''CREATE TABLE IF NOT EXISTS email_contacts 
-                      (id INTEGER PRIMARY KEY, name TEXT, email TEXT)''')
+                      (id INTEGER PRIMARY KEY, name TEXT UNIQUE, email TEXT)''')
     conn.commit()
     conn.close()
-
 
 def addContact():
     speak("Do you want to save a WhatsApp number, or an Email address?")
@@ -187,10 +175,10 @@ def addContact():
         wait_until_silent()
         number_spoken = speakToText()
         
-        # Clean up number (removes spaces, hyphens, and text)
+        # Clean up number and validate exactly 10 digits starting with 6-9
         clean_number = "".join(filter(str.isdigit, number_spoken))
-        if len(clean_number) < 10:
-            speak("That doesn't sound like a complete phone number. Cancelling.")
+        if not re.match(r"^[6-9]\d{9}$", clean_number):
+            speak("That doesn't seem to be a valid 10-digit mobile number. Cancelling.")
             return
             
         # Save to DB
@@ -198,7 +186,6 @@ def addContact():
             conn = sqlite3.connect("contact.db")
             cursor = conn.cursor()
             
-            # Check if contact already exists
             cursor.execute("SELECT id FROM contacts WHERE name=?", (name.lower(),))
             if cursor.fetchone():
                 cursor.execute("UPDATE contacts SET phone_number=? WHERE name=?", (clean_number, name.lower()))
@@ -227,22 +214,18 @@ def addContact():
         wait_until_silent()
         email_spoken = speakToText().lower()
         
-        # Clean up spoken email (e.g., "pratik at gmail dot com" -> "pratik@gmail.com")
         clean_email = email_spoken.replace(" at ", "@").replace(" dot ", ".").replace(" ", "")
         
-        # THE FIX: Validate it's a real email address before saving
         pattern = r'^[\w\.-]+@[\w\.-]+\.\w+$'
         if not re.match(pattern, clean_email):
             speak("That email address format is invalid. Cancelling.")
             return
         
         # Save to DB
-        # Save or Update Email in DB
         try:
             conn = sqlite3.connect("contact.db")
             cursor = conn.cursor()
             
-            # Check if email contact already exists
             cursor.execute("SELECT id FROM email_contacts WHERE name=?", (name.lower(),))
             if cursor.fetchone():
                 cursor.execute("UPDATE email_contacts SET email=? WHERE name=?", (clean_email, name.lower()))
@@ -266,50 +249,39 @@ def addContact():
 def speak(text):
     global speech_thread, stop_speaking, speech_id_counter
 
-    # Thread lock prevents rapid-fire inputs from causing a race condition
     with speech_lock:
-        # 1. Stop any current audio immediately
         if pygame.mixer.get_init():
             pygame.mixer.stop()
             pygame.mixer.music.stop()
 
-        # 2. Increment ID: This tells any previous running 'speak' threads to abort
         speech_id_counter += 1
         my_id = speech_id_counter
         stop_speaking = False
 
-    
     set_ui_state("processing")
 
     def run_wrapper():
-        # Use BytesIO to hold Audio data in RAM
         target_source = io.BytesIO()
 
         try:
-            # Generate Audio
             communicate = edge_tts.Communicate(text, "hi-IN-SwaraNeural", rate="+20%")
 
             async def collect_audio():
                 async for chunk in communicate.stream():
-                    # CHECK: If a new speak() command started, stop generating this one
                     if my_id != speech_id_counter:
                         return
-                    
                     if chunk["type"] == "audio":
                         target_source.write(chunk["data"])
 
-            # Run in the global loop
             future = asyncio.run_coroutine_threadsafe(collect_audio(), tts_loop)
             future.result()
 
-            # CHECK: Before playing, did a new command come in?
             if my_id != speech_id_counter:
                 return
 
             target_source.seek(0)
 
         except Exception as e:
-            # print(f"TTS Error: {e}")
             set_ui_state("idle")
             return
 
@@ -317,19 +289,17 @@ def speak(text):
             if not pygame.mixer.get_init():
                 set_ui_state("idle")
                 return
-            # Play using Sound object
+                
             sound = pygame.mixer.Sound(file=target_source)
 
-            # CHECK: Double check before playing
             if my_id != speech_id_counter:
                 return
             ui_print(f"CYPHER: {text}")
-            # FORCED SINGLE CHANNEL: Prevents overlapping audio natively
+            
             channel = pygame.mixer.Channel(0)
             channel.play(sound)
 
             while channel.get_busy():
-                # CHECK: Stop if user pressed ESC or new ID appeared
                 if stop_speaking or my_id != speech_id_counter:
                     channel.stop()
                     break
@@ -338,18 +308,15 @@ def speak(text):
         except Exception as e:
             print(f"Playback Error: {e}")
         finally:
-            # Only reset to idle if this thread is still the active one
             if my_id == speech_id_counter:
                 set_ui_state("idle")
 
     speech_thread = threading.Thread(target=run_wrapper, daemon=True)
     speech_thread.start()
 
-
 def wait_until_silent():
     if speech_thread and speech_thread.is_alive():
         speech_thread.join(timeout=10)
-
 
 def stopSpeaking():
     global stop_speaking
@@ -358,18 +325,13 @@ def stopSpeaking():
         pygame.mixer.stop()  # Stops all active Sound channels
         pygame.mixer.music.stop()  # Stops any background music
 
-
-# Bind Hotkey to stop speaking
 k.add_hotkey("esc", stopSpeaking)
-
 
 def okSir():
     speak("Okay sir")
     return
 
-
 HISTORY_FILE = "chat_memory.json"
-
 
 def save_memory():
     """Saves the current chat history to a file, limiting size to prevent bloat."""
@@ -386,7 +348,6 @@ def save_memory():
     except Exception as e:
         print(f"Memory Save Error: {e}")
 
-
 def load_memory():
     """Loads chat history from file on startup"""
     global chat_history
@@ -399,46 +360,15 @@ def load_memory():
         except Exception as e:
             print("Memory corrupted, starting fresh.")
 
-    # If no file exists, start fresh
     init_chat()
 
-# --- UPDATED INIT CHAT ---
 def init_chat():
     global chat_history
     chat_history = [
-        {
-            "role": "user",
-            "parts": [
-                {
-                    "text": "You are CYPHER, a stylish, empathetic, and witty AI assistant. Speak in a mix of English and Hindi (Hinglish) when appropriate, and always address the user as 'Sir'."
-                }
-            ],
-        },
-        {
-            "role": "model",
-            "parts": [
-                {
-                    "text": "Namaste Sir. Systems are online. I am Cypher, ready to assist."
-                }
-            ],
-        },
-        {
-            "role": "user",
-            "parts": [
-                {
-                    "text": "You are CYPHER, created by Pratik Pattanayak."
-                }
-            ],
-        },
-        {
-            "role": "user",
-            "parts": [
-                {
-                    # ---> THIS IS THE NEW STRICT RULE <---
-                    "text": "CRITICAL RULE: You must always give extremely short, punchy, and direct responses. NEVER exceed 1 or 2 sentences unless I explicitly ask you for a detailed explanation. Do not use markdown formatting. Be quick and conversational."
-                }
-            ],
-        },
+        {"role": "user", "parts": [{"text": "You are CYPHER, a stylish, empathetic, and witty AI assistant. Speak in a mix of English and Hindi (Hinglish) when appropriate, and always address the user as 'Sir'."}]},
+        {"role": "model", "parts": [{"text": "Namaste Sir. Systems are online. I am Cypher, ready to assist."}]},
+        {"role": "user", "parts": [{"text": "You are CYPHER, created by Pratik Pattanayak."}]},
+        {"role": "user", "parts": [{"text": "CRITICAL RULE: You must always give extremely short, punchy, and direct responses. NEVER exceed 1 or 2 sentences unless I explicitly ask you for a detailed explanation. Do not use markdown formatting. Be quick and conversational."}]},
     ]
 
 def reset_chat():
@@ -447,21 +377,25 @@ def reset_chat():
     save_memory()  # Overwrite the file with the fresh start
     speak("Memory Cleared. Starting fresh.")
 
-
 def aiProcess(prompt):
     global chat_history, gemini_client, groq_client
+    
+    if not gemini_client and not groq_client:
+        return "System Warning: Both primary and backup AI modules are missing their API keys."
     
     # 1. Add user prompt to memory first
     chat_history.append({"role": "user", "parts": [{"text": prompt}]})
     
     try:
+        if not gemini_client:
+            raise Exception("Gemini Client not initialized.")
+            
         # --- ATTEMPT 1: PRIMARY BRAIN (GEMINI) ---
         response = gemini_client.models.generate_content(
             model="gemini-2.5-flash", contents=chat_history
         )
         reply = response.text.strip().replace("*", "").replace("#", "").replace("`", "")
         
-        # Save memory and return
         chat_history.append({"role": "model", "parts": [{"text": reply}]})
         save_memory()
         return reply
@@ -470,15 +404,16 @@ def aiProcess(prompt):
         print(f"Gemini Brain Offline ({gemini_error}). Switching to Groq Backup...")
         
         try:
+            if not groq_client:
+                raise Exception("Groq Client not initialized.")
+                
             # --- ATTEMPT 2: BACKUP BRAIN (GROQ) ---
-            # Groq needs a different memory format, so we quickly translate Cypher's memory
             groq_history = []
             for msg in chat_history:
                 role = "assistant" if msg["role"] == "model" else "user"
                 content = msg["parts"][0]["text"]
                 groq_history.append({"role": role, "content": content})
                 
-            # Call Groq (Using LLaMA 3 8B because it is blazing fast)
             groq_response = groq_client.chat.completions.create(
                 messages=groq_history,
                 model="llama-3.3-70b-versatile" 
@@ -486,7 +421,6 @@ def aiProcess(prompt):
             
             reply = groq_response.choices[0].message.content.strip().replace("*", "").replace("#", "").replace("`", "")
             
-            # Save memory in original format so Gemini can read it when it comes back online
             chat_history.append({"role": "model", "parts": [{"text": reply}]})
             save_memory()
             return reply
@@ -494,7 +428,6 @@ def aiProcess(prompt):
         except Exception as groq_error:
             print(f"Groq Brain Offline: {groq_error}")
             
-            # If BOTH brains fail, remove the prompt and apologize
             if chat_history and chat_history[-1]["role"] == "user":
                 chat_history = chat_history[:-1]
             return "I have lost connection to both my primary and backup servers, sir."
@@ -503,34 +436,27 @@ def speak_while_thinking(prompt):
     res = aiProcess(prompt)
     if res:
         speak(res)
-        wait_until_silent()  # Force the mic to stay off until she finishes her sentence
-
+        wait_until_silent()
 
 def speakToText(retries=3):
     for _ in range(retries):
         set_ui_state("listening")
         try:
-            # 1. Record audio using sounddevice (No PyAudio required)
-            # Records 5 seconds of audio at 16000 Hz
             fs = 16000  
             duration = 5  
             print("Listening...")
             
-            # This captures the microphone data into a numpy array
             try:
                 recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
                 sd.wait()
             except ValueError:
-                fs = 44100  # Fallback to standard audio rate
+                fs = 44100 
                 recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
                 sd.wait()
             
             set_ui_state("processing")
-            
-            # 2. Convert raw numpy array to SpeechRecognition AudioData
             audio_data = sr.AudioData(recording.tobytes(), fs, 2)
             
-            # 3. Send to Google API
             text = recognizer.recognize_google(audio_data, language="en-IN")
             ui_print(f"USER: {text}")
             
@@ -613,13 +539,12 @@ APPS_NAMES = {
 def openApp(app):
     try:
         pyautogui.hotkey("win", "s")
-        time.sleep(0.15)  # Minimized delay here
-        pyautogui.write(app, interval=0.01)  # Faster typing speed
-        time.sleep(0.15)  # Short pause to let search results populate
+        time.sleep(0.15) 
+        pyautogui.write(app, interval=0.01) 
+        time.sleep(0.15) 
         k.press_and_release("enter")
     except:
         speak("I couldn't identify the application name.")
-
 
 def processCommand(c):
     c_lower = c.lower()
@@ -765,8 +690,11 @@ def processCommand(c):
             setAlarm(alarm_time)
         except ValueError:
             speak("I received an invalid time format. Cancelling alarm.")
-
             
+    elif "cancel alarm" in c_lower or "stop alarm" in c_lower:
+        alarm_event.set()
+        speak("The active alarm has been cancelled, Sir.")
+      
     # 6. Fallback to Gemini/Groq Brain
     else:
         conversational_words = ["hello", "hi", "hey", "thanks", "yes", "no", "why", "who", "what", "wow"]
@@ -794,7 +722,6 @@ def greet():
     else:
         greeting = "Good Evening, Sir."
 
-    # FIX: Combine the greeting and the name into one speak() call
     speak(f"{greeting} I am Cypher. How may I assist you?")
 
 
@@ -806,14 +733,9 @@ def shutdown_sequence():
         "Going offline. Take care, Sir.",
         "System hibernation initiated. Goodbye.",
     ]
-
-    # Select a random message from the list
     choice = random.choice(farewell_messages)
     speak(choice)
-
     wait_until_silent()
-
-    # NOW it is safe to close the GUI
     if close_callback:
         close_callback()
 
@@ -865,14 +787,12 @@ def sendMail():
     else:
         speak(f"I couldn't find an email for {name}")
 
-
 # mail body
 def getMailBody():
     speak("What should I say in the email?")
     wait_until_silent()
     body = speakToText()
     return body
-
 
 # mail subject
 def getMailSubject():
@@ -881,24 +801,24 @@ def getMailSubject():
     subject = speakToText()
     return subject
 
-
 def send_email_smtp(to_address, subject, body):
     from_address = os.getenv("EMAIL_USER")
     password = os.getenv("EMAIL_PASS")
-
     message = f"Subject: {subject}\n\n{body}"
-
+    server = None
+    
     try:
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
         server.login(from_address, password)
         server.sendmail(from_address, to_address, message)
-        server.quit()
         speak("Email has been sent successfully.")
     except Exception as e:
         print(e)
         speak("Sorry, I was unable to send the email.")
-
+    finally:
+        if server:
+            server.quit()
 
 # check emails
 def check_emails():
@@ -906,12 +826,10 @@ def check_emails():
         speak("Checking for new emails, Sir...")
         wait_until_silent()
 
-        # Connect to Gmail IMAP
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASS"))
         mail.select("inbox")
 
-        # Search for unread emails
         status, messages = mail.search(None, "UNSEEN")
         email_ids = messages[0].split()
 
@@ -924,16 +842,14 @@ def check_emails():
         speak(f"You have {count} new emails.")
         wait_until_silent()
 
-        # Read the latest 3 emails
         for i in range(min(3, count)):
-            latest_email_id = email_ids[-(i + 1)]  # Get latest first
+            latest_email_id = email_ids[-(i + 1)] 
             _, msg_data = mail.fetch(latest_email_id, "(RFC822)")
 
             for response_part in msg_data:
                 if isinstance(response_part, tuple):
                     msg = email.message_from_bytes(response_part[1])
 
-                    # Correctly decode multi-part encoded subjects
                     subject_parts = decode_header(msg["Subject"])
                     subject = "".join(
                         [
@@ -946,7 +862,6 @@ def check_emails():
                         ]
                     )
 
-                    # Decode and clean Sender Name
                     from_header = msg.get("From")
                     if from_header:
                         from_parts = decode_header(from_header)
@@ -960,17 +875,13 @@ def check_emails():
                                 for part in from_parts
                             ]
                         )
-                        # Strip email address <...> for cleaner TTS
                         if "<" in from_:
                             from_ = from_.split("<")[0].strip().replace('"', "")
                     else:
                         from_ = "Unknown"
 
-                    # Just speak normally, and then tell the script to freeze!
                     speak(f"Email {i+1} from {from_}. Subject: {subject}")
                     wait_until_silent()
-
-                    # Small pause between emails
                     time.sleep(0.5)
 
         speak("That is all for now, Sir.")
@@ -986,13 +897,11 @@ def check_emails():
             except:
                 pass
 
-
 # weather fetch function
 def getWeather(city):
-    """Fetches real-time weather data and formats it for Voice TTS."""
+    """Fetches weather data for the specified city using OpenWeather API."""
     try:
         api_key = os.getenv("OPENWEATHER_KEY")
-        
         if not api_key:
             return "Error: OpenWeather API key is missing from the environment variables."
 
@@ -1001,30 +910,21 @@ def getWeather(city):
         
         response = requests.get(url, headers=headers, timeout=10)
         
-        # Check if the city was found
         if response.status_code == 404:
             return f"I'm sorry, I couldn't find any weather data for the city {city}."
             
         if response.status_code == 200:
             data = response.json()
-            
-            # Extract variables
             city_name = data['name']
-            temp = round(data['main']['temp']) # Round to whole number for better speech
+            temp = round(data['main']['temp'])
             description = data['weather'][0]['description']
             humidity = data['main']['humidity']
             wind_speed = data['wind']['speed']
-            
-            # Formatted conversationally for Microsoft Edge-TTS
-            weather_info = f"Currently in {city_name}, it is {temp} degrees Celsius with {description}. The humidity is at {humidity} percent, with a wind speed of {wind_speed} meters per second."
-            
-            return weather_info
-            
+            return f"Currently in {city_name}, it is {temp} degrees Celsius with {description}. The humidity is at {humidity} percent, with a wind speed of {wind_speed} meters per second."
         else:
             return "There was an error communicating with the weather server."
             
     except requests.exceptions.RequestException as e:
-        # Handles no internet connection or timeout
         return "I am currently unable to connect to the weather network. Please check your internet connection."
     except Exception as e:
         return "Sorry, I encountered an internal error while fetching the weather."
@@ -1117,12 +1017,9 @@ def send_whatsapp_message(phone_number, message):
 def search_wikipedia(topic):
     if not topic:
         return "I didn't catch the topic, sir."
-
     try:
-        # Just search exactly what it was given!
         result = wikipedia.summary(topic, sentences=2)
         return f"According to Wikipedia: {result}"
-        
     except wikipedia.exceptions.DisambiguationError:
         return "There are too many different results for that topic. Please be more specific."
     except wikipedia.exceptions.PageError:
@@ -1130,33 +1027,28 @@ def search_wikipedia(topic):
     except Exception as e:
         print(f"Wikipedia Error: {e}")
         return "Connection to Wikipedia failed, sir."  
+
 # check internet speed
 def check_internet_speed():
     try:
-        # 1. Tell Cypher to speak normally
         speak("Checking internet speed, please wait...")
-
-        # 2. Use your new function to FREEZE the program until she finishes talking
         wait_until_silent()
 
-        # 3. NOW it is safe to run the speed test!
         st = speedtest.Speedtest()
-
-        # Faster: skip full server scan
         st.get_best_server()
-
         download_speed = st.download(threads=1) / 1_000_000
         upload_speed = st.upload(threads=1) / 1_000_000
         ping = st.results.ping
 
         return f"Download {download_speed:.1f} Mbps, Upload {upload_speed:.1f} Mbps, Ping {ping:.0f} ms"
-
     except Exception as e:
         print(e)
         return "Internet speed check failed, sir."
 
-# alarm
 def setAlarm(time_str):
+    global alarm_event
+    alarm_event.clear() # Reset the cancellation flag
+    
     def alarm_worker():
         try:
             now = datetime.now()
@@ -1170,12 +1062,15 @@ def setAlarm(time_str):
 
             sleep_seconds = (alarm_datetime - datetime.now()).total_seconds()
 
-            time.sleep(sleep_seconds)
+            # Wait for sleep_seconds, OR until the user cancels it
+            was_cancelled = alarm_event.wait(timeout=sleep_seconds)
 
-            speak("Alarm ringing, Sir!")
+            if not was_cancelled:
+                speak("Alarm ringing, Sir!")
 
         except Exception as e:
             print(f"Alarm Error: {e}")
+            
     threading.Thread(target=alarm_worker, daemon=True).start()
 
 
@@ -1184,9 +1079,9 @@ def activateAssistant():
     is_running = True
     greet()
 
-    fs = 16000  # Sample rate
-    duration_wake = 2  # Listen for 2 seconds for wake word
-    duration_cmd = 5   # Listen for 5 seconds for command
+    fs = 16000  
+    duration_wake = 2 
+    duration_cmd = 5 
 
     while is_running:
         set_ui_state("listening")
@@ -1195,12 +1090,11 @@ def activateAssistant():
             while speech_thread and speech_thread.is_alive():
                 time.sleep(0.05)
             
-            # Record using sounddevice for Wake Word
             try:
                 recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
                 sd.wait()
             except ValueError:
-                fs = 44100 # Fallback
+                fs = 44100 
                 recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
                 sd.wait()
             if not is_running:
@@ -1230,8 +1124,6 @@ def activateAssistant():
                         # ---> PLAY A TINY BEEP SO THE USER KNOWS TO SPEAK <---
                         print("\a")
                         
-                        # Record using sounddevice for Command
-                        # THE FIX: Safe hardware fallback for the main command too
                         try:
                             cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
                             sd.wait()
@@ -1263,7 +1155,7 @@ def activateAssistant():
                         set_ui_state("idle")
 
         except sr.UnknownValueError:
-            pass # Ignore silence/unrecognized noise while waiting for wake word
+            pass 
         except Exception as e:
             print(f"Wake Word Error: {e}")
         finally:
