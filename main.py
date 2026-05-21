@@ -40,6 +40,9 @@ ui_print = print
 close_callback = None
 ui_state_callback = None
 is_running = True
+# Global API Clients
+gemini_client = None
+groq_client = None
 
 # global flags
 speech_thread = None
@@ -125,6 +128,7 @@ def stop_execution():
 
 # function for checking environment variable
 def check_env_variable():
+    global gemini_client, groq_client
     print("Performing system checks...")
     required_keys = [
         "GEMINI_API_KEY",
@@ -140,6 +144,11 @@ def check_env_variable():
             f"Warning: The following environment variables are missing: {', '.join(missing_keys)}"
         )
         # We don't exit here to allow partial functionality, but warn user
+    if os.getenv("GEMINI_API_KEY"):
+        gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    if os.getenv("GROQ_API_KEY"):
+        groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+        
     if not os.path.exists("contact.db"):
         print("Warning: contact.db database file is missing.")
     init_db()
@@ -185,12 +194,26 @@ def addContact():
             return
             
         # Save to DB
-        conn = sqlite3.connect("contact.db")
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO contacts (name, phone_number) VALUES (?, ?)", (name.lower(), clean_number))
-        conn.commit()
-        conn.close()
-        speak(f"Successfully saved WhatsApp number for {name}.")
+        try:
+            conn = sqlite3.connect("contact.db")
+            cursor = conn.cursor()
+            
+            # Check if contact already exists
+            cursor.execute("SELECT id FROM contacts WHERE name=?", (name.lower(),))
+            if cursor.fetchone():
+                cursor.execute("UPDATE contacts SET phone_number=? WHERE name=?", (clean_number, name.lower()))
+                speak(f"Updated existing WhatsApp number for {name}.")
+            else:
+                cursor.execute("INSERT INTO contacts (name, phone_number) VALUES (?, ?)", (name.lower(), clean_number))
+                speak(f"Successfully saved WhatsApp number for {name}.")
+                
+            conn.commit()
+        except sqlite3.Error as e:
+            speak("A database error occurred.")
+            print(f"DB Error: {e}")
+        finally:
+            if 'conn' in locals():
+                conn.close()
         
     elif "email" in contact_type:
         speak("What is the name of the contact?")
@@ -214,12 +237,27 @@ def addContact():
             return
         
         # Save to DB
-        conn = sqlite3.connect("contact.db")
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO email_contacts (name, email) VALUES (?, ?)", (name.lower(), clean_email))
-        conn.commit()
-        conn.close()
-        speak(f"Successfully saved email address for {name}.")
+        # Save or Update Email in DB
+        try:
+            conn = sqlite3.connect("contact.db")
+            cursor = conn.cursor()
+            
+            # Check if email contact already exists
+            cursor.execute("SELECT id FROM email_contacts WHERE name=?", (name.lower(),))
+            if cursor.fetchone():
+                cursor.execute("UPDATE email_contacts SET email=? WHERE name=?", (clean_email, name.lower()))
+                speak(f"Updated existing email address for {name}.")
+            else:
+                cursor.execute("INSERT INTO email_contacts (name, email) VALUES (?, ?)", (name.lower(), clean_email))
+                speak(f"Successfully saved email address for {name}.")
+                
+            conn.commit()
+        except sqlite3.Error as e:
+            speak("A database error occurred.")
+            print(f"DB Error: {e}")
+        finally:
+            if 'conn' in locals():
+                conn.close()
         
     else:
         speak("I didn't understand the contact type. Please try again.")
@@ -334,8 +372,14 @@ HISTORY_FILE = "chat_memory.json"
 
 
 def save_memory():
-    """Saves the current chat history to a file"""
+    """Saves the current chat history to a file, limiting size to prevent bloat."""
     global chat_history
+    MAX_HISTORY = 30
+    
+    # If history exceeds limit, keep the first 4 (System Rules) and the newest messages
+    if len(chat_history) > MAX_HISTORY:
+        chat_history = chat_history[:4] + chat_history[-(MAX_HISTORY - 4):]
+        
     try:
         with open(HISTORY_FILE, "w") as f:
             json.dump(chat_history, f)
@@ -405,16 +449,14 @@ def reset_chat():
 
 
 def aiProcess(prompt):
-    global chat_history
+    global chat_history, gemini_client, groq_client
     
     # 1. Add user prompt to memory first
     chat_history.append({"role": "user", "parts": [{"text": prompt}]})
     
     try:
         # --- ATTEMPT 1: PRIMARY BRAIN (GEMINI) ---
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-        response = client.models.generate_content(
+        response = gemini_client.models.generate_content(
             model="gemini-2.5-flash", contents=chat_history
         )
         reply = response.text.strip().replace("*", "").replace("#", "").replace("`", "")
@@ -429,8 +471,6 @@ def aiProcess(prompt):
         
         try:
             # --- ATTEMPT 2: BACKUP BRAIN (GROQ) ---
-            groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-            
             # Groq needs a different memory format, so we quickly translate Cypher's memory
             groq_history = []
             for msg in chat_history:
@@ -477,8 +517,13 @@ def speakToText(retries=3):
             print("Listening...")
             
             # This captures the microphone data into a numpy array
-            recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
-            sd.wait() # Wait until recording is finished
+            try:
+                recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
+                sd.wait()
+            except ValueError:
+                fs = 44100  # Fallback to standard audio rate
+                recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
+                sd.wait()
             
             set_ui_state("processing")
             
@@ -635,9 +680,11 @@ def processCommand(c):
             speak("Shutdown cancelled.") 
         
     elif "restart" in c_lower:
-        speak("Are you sure you want to restart?")
+        speak("Are you sure you want to restart the system, Sir? Say yes to confirm.")
+        wait_until_silent()
         confirmation = speakToText()
         if "yes" in confirmation:
+            speak("Restarting.")
             os.system("shutdown /r /t 1")
         else:
             speak("Restart cancelled.")
@@ -988,19 +1035,19 @@ def getNews():
         api = NewsDataApiClient(apikey=os.getenv("NEWS_API_KEY"))
         response = api.latest_api(country="in", language="en")
 
-        if response["status"] == "success":
-            articles = response["results"]
+        if response.get("status") == "success":
+            articles = response.get("results", [])
             news_brief = "Here are the top news headlines. "
-
             for i in range(min(5, len(articles))):
                 news_brief += f"{i+1}. {articles[i]['title']}. "
-
             print(news_brief)
             return news_brief
+        else:
+            return "Sorry, I could not fetch the news at this moment."
+            
     except Exception as e:
-        print(f"Error: Unable to fetch news. {e}")
-        return "Sorry, I could not fetch the news."
-
+        print(f"News API Error: {e}")
+        return "Unable to fetch news right now due to a network error."
 
 # whatsapp message function
 def get_whatsapp_number_from_db(name_spoken):
@@ -1149,8 +1196,13 @@ def activateAssistant():
                 time.sleep(0.05)
             
             # Record using sounddevice for Wake Word
-            recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
-            sd.wait()
+            try:
+                recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
+                sd.wait()
+            except ValueError:
+                fs = 44100 # Fallback
+                recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
+                sd.wait()
             if not is_running:
                 return
             audio_data = sr.AudioData(recording.tobytes(), fs, 2)
@@ -1179,8 +1231,14 @@ def activateAssistant():
                         print("\a")
                         
                         # Record using sounddevice for Command
-                        cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
-                        sd.wait()
+                        # THE FIX: Safe hardware fallback for the main command too
+                        try:
+                            cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
+                            sd.wait()
+                        except ValueError:
+                            fs = 44100
+                            cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
+                            sd.wait()
                         if not is_running:
                             return
                         cmd_audio = sr.AudioData(cmd_recording.tobytes(), fs, 2)
