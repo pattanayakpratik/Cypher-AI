@@ -486,7 +486,8 @@ class MainWindow(QtWidgets.QMainWindow):
         main.set_ui_state_callback(self.update_state_threadsafe)
         
         self.update_log_threadsafe("Initializing Neural Network...")
-        
+        if self.ai_thread and self.ai_thread.is_alive():
+            return
         # FIX 2: Save the thread to 'self.ai_thread' so we can track it
         self.ai_thread = threading.Thread(target=self.run_ai)
         self.ai_thread.daemon = True

@@ -702,6 +702,11 @@ def processCommand(c):
         wait_until_silent()
         alarm_time = speakToText()
         alarm_time = alarm_time.replace(" ", "")
+        try:
+            datetime.strptime(alarm_time,"%H:%M")
+        except ValueError:
+            speak("Invalid time format.")
+            return
         speak(f"Setting alarm for {alarm_time}, Sir.")
         setAlarm(alarm_time)
 
