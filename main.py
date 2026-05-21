@@ -913,12 +913,17 @@ def check_emails():
                     time.sleep(0.5)
 
         speak("That is all for now, Sir.")
-        mail.close()
-        mail.logout()
 
     except Exception as e:
         print(e)
         speak("I encountered an error while accessing your inbox, Sir.")
+    finally:
+        if 'mail' in locals():
+            try:
+                mail.close()
+                mail.logout()
+            except:
+                pass
 
 
 # weather fetch function
