@@ -1159,6 +1159,8 @@ def activateAssistant():
                     try:
                         print("CYPHER Active...")
                         set_ui_state("listening")
+                        # ---> PLAY A TINY BEEP SO THE USER KNOWS TO SPEAK <---
+                        print("\a")
                         
                         # Record using sounddevice for Command
                         cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
