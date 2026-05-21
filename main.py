@@ -635,9 +635,12 @@ def processCommand(c):
             speak("Shutdown cancelled.") 
         
     elif "restart" in c_lower:
-        speak("Restarting the system, Sir.")
-        wait_until_silent()
-        os.system("shutdown /r /t 1")
+        speak("Are you sure you want to restart?")
+        confirmation = speakToText()
+        if "yes" in confirmation:
+            os.system("shutdown /r /t 1")
+        else:
+            speak("Restart cancelled.")
         
     elif "weather" in c_lower:
         city = c_lower.split("in")[-1].strip() if "in" in c_lower else "Mumbai"
@@ -981,20 +984,21 @@ def getWeather(city):
 
 
 def getNews():
-    api = NewsDataApiClient(apikey=os.getenv("NEWS_API_KEY"))
-    response = api.latest_api(country="in", language="en")
+    try:
+        api = NewsDataApiClient(apikey=os.getenv("NEWS_API_KEY"))
+        response = api.latest_api(country="in", language="en")
 
-    if response["status"] == "success":
-        articles = response["results"]
-        news_brief = "Here are the top news headlines. "
+        if response["status"] == "success":
+            articles = response["results"]
+            news_brief = "Here are the top news headlines. "
 
-        for i in range(min(5, len(articles))):
-            news_brief += f"{i+1}. {articles[i]['title']}. "
+            for i in range(min(5, len(articles))):
+                news_brief += f"{i+1}. {articles[i]['title']}. "
 
-        print(news_brief)
-        return news_brief
-    else:
-        print("Error: Unable to fetch news.")
+            print(news_brief)
+            return news_brief
+    except Exception as e:
+        print(f"Error: Unable to fetch news. {e}")
         return "Sorry, I could not fetch the news."
 
 
