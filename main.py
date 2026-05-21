@@ -148,10 +148,10 @@ def init_db():
     cursor = conn.cursor()
     # Create WhatsApp table with UNIQUE name constraint
     cursor.execute('''CREATE TABLE IF NOT EXISTS contacts 
-                      (id INTEGER PRIMARY KEY, name TEXT UNIQUE, phone_number TEXT)''')
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, phone_number TEXT)''')
     # Create Email table with UNIQUE name constraint
     cursor.execute('''CREATE TABLE IF NOT EXISTS email_contacts 
-                      (id INTEGER PRIMARY KEY, name TEXT UNIQUE, email TEXT)''')
+                      (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, email TEXT)''')
     conn.commit()
     conn.close()
 
@@ -177,6 +177,12 @@ def addContact():
         
         # Clean up number and validate exactly 10 digits starting with 6-9
         clean_number = "".join(filter(str.isdigit, number_spoken))
+        
+        if len(clean_number) > 10 and clean_number.startswith("91"):
+            clean_number = clean_number[2:]
+        elif len(clean_number) == 11 and clean_number.startswith("0"):
+            clean_number = clean_number[1:]
+
         if not re.match(r"^[6-9]\d{9}$", clean_number):
             speak("That doesn't seem to be a valid 10-digit mobile number. Cancelling.")
             return
@@ -543,8 +549,9 @@ def openApp(app):
         pyautogui.write(app, interval=0.01) 
         time.sleep(0.15) 
         k.press_and_release("enter")
-    except:
-        speak("I couldn't identify the application name.")
+    except Exception as e:
+        print(e)
+        speak("Unable to open application.")
 
 def processCommand(c):
     c_lower = c.lower()
@@ -746,8 +753,8 @@ def get_email_from_db(name_spoken):
         conn = sqlite3.connect("contact.db")
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT email FROM email_contacts WHERE LOWER(name) LIKE ?",
-            ("%" + name_spoken.lower().strip() + "%",),
+            "SELECT email FROM email_contacts WHERE LOWER(name) = ?",
+            (name_spoken.lower().strip(),)
         )
         result = cursor.fetchone()
         return result[0] if result else None
@@ -955,8 +962,8 @@ def get_whatsapp_number_from_db(name_spoken):
         conn = sqlite3.connect("contact.db")
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT phone_number FROM contacts WHERE LOWER(name) LIKE ?",
-            ("%" + name_spoken.lower().strip() + "%",),
+            "SELECT phone_number FROM contacts WHERE LOWER(name) = ?",
+            (name_spoken.lower().strip(),)
         )
         result = cursor.fetchone()
     except sqlite3.Error as e:
@@ -1080,7 +1087,7 @@ def activateAssistant():
     greet()
 
     fs = 16000  
-    duration_wake = 2 
+    duration_wake = 1
     duration_cmd = 5 
 
     while is_running:

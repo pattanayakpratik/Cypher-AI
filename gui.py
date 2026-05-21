@@ -77,7 +77,7 @@ class RotatingCore(QtWidgets.QWidget):
         self.angle_3 = 0
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animate)
-        self.timer.start(20) 
+        self.timer.start(33) 
         self.is_active = False 
         self.state = "idle"
         
