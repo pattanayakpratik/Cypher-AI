@@ -32,6 +32,7 @@ import json
 import speedtest
 from groq import Groq
 import wikipedia
+import re 
 
 
 load_dotenv()
@@ -205,6 +206,12 @@ def addContact():
         
         # Clean up spoken email (e.g., "pratik at gmail dot com" -> "pratik@gmail.com")
         clean_email = email_spoken.replace(" at ", "@").replace(" dot ", ".").replace(" ", "")
+        
+        # THE FIX: Validate it's a real email address before saving
+        pattern = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+        if not re.match(pattern, clean_email):
+            speak("That email address format is invalid. Cancelling.")
+            return
         
         # Save to DB
         conn = sqlite3.connect("contact.db")
@@ -661,7 +668,7 @@ def processCommand(c):
         
     elif "wikipedia" in c_lower:
         # 1. Clean the text here in the router!
-        topic = c_lower.replace("search wikipedia for", "").replace("wikipedia", "").replace("who is", "").replace("what is", "").strip()
+        topic = re.sub(r"(search wikipedia for|wikipedia|who is|what is)", "", c_lower).strip()
         
         # 2. If it's empty, ask the user
         if not topic:
@@ -701,14 +708,13 @@ def processCommand(c):
         speak("At what time should I set the alarm, Sir? Please say it in HH:MM format.")
         wait_until_silent()
         alarm_time = speakToText()
-        alarm_time = alarm_time.replace(" ", "")
+        alarm_time = alarm_time.replace(" ", "").replace(".", ":")
         try:
-            datetime.strptime(alarm_time,"%H:%M")
+            datetime.strptime(alarm_time, "%H:%M")
+            speak(f"Setting alarm for {alarm_time}, Sir.")
+            setAlarm(alarm_time)
         except ValueError:
-            speak("Invalid time format.")
-            return
-        speak(f"Setting alarm for {alarm_time}, Sir.")
-        setAlarm(alarm_time)
+            speak("I received an invalid time format. Cancelling alarm.")
 
             
     # 6. Fallback to Gemini/Groq Brain
@@ -943,7 +949,7 @@ def getWeather(city):
         url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
         headers = {"User-Agent": "CypherVoiceAssistant/1.0"}
         
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=10)
         
         # Check if the city was found
         if response.status_code == 404:
@@ -1002,7 +1008,6 @@ def get_whatsapp_number_from_db(name_spoken):
             ("%" + name_spoken.lower().strip() + "%",),
         )
         result = cursor.fetchone()
-        conn.close()
     except sqlite3.Error as e:
         print(f"Database Error: {e}")
         return None
@@ -1142,6 +1147,8 @@ def activateAssistant():
             # Record using sounddevice for Wake Word
             recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
             sd.wait()
+            if not is_running:
+                return
             audio_data = sr.AudioData(recording.tobytes(), fs, 2)
 
             set_ui_state("processing")
@@ -1170,6 +1177,8 @@ def activateAssistant():
                         # Record using sounddevice for Command
                         cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
                         sd.wait()
+                        if not is_running:
+                            return
                         cmd_audio = sr.AudioData(cmd_recording.tobytes(), fs, 2)
 
                         set_ui_state("processing")
