@@ -5,7 +5,7 @@ import psutil
 import os
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal
-import main 
+from main import CypherCore
 
 # --- CONFIGURATION ---
 COLOR_BG = "#05080d"        # Deep Space Black
@@ -403,10 +403,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sig_log.connect(self.terminal.log)
         self.sig_close.connect(self.close_safely)
         self.sig_state.connect(self.core.set_state)
+        self.cypher = CypherCore()
 
         # esc
         self.esc_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Esc"), self)
-        self.esc_shortcut.activated.connect(main.stopSpeaking)
+        self.esc_shortcut.activated.connect(self.cypher.stop_speaking)
         
         self.oldPos = self.pos()
         self.sys_timer = QTimer(self)
@@ -468,10 +469,8 @@ class MainWindow(QtWidgets.QMainWindow):
         else: self.stop_system()
             
     def start_system(self):
-        if self.core.is_active:
+        if self.core.is_active: 
             return
-            
-        # FIX 1: Prevent starting a new thread if the old one is still dying
         if hasattr(self, 'ai_thread') and self.ai_thread and self.ai_thread.is_alive():
             self.terminal.log("Waiting for background tasks to terminate...")
             return
@@ -479,36 +478,40 @@ class MainWindow(QtWidgets.QMainWindow):
         self.core.is_active = True
         self.btn_action.setText("TERMINATE SYSTEM")
         self.btn_action.setStyleSheet(f"""
-            background-color: rgba(255, 50, 50, 0.2); color: #ff5555; border: 2px solid #ff5555; font-family: '{self.tech_font}'; font-size: 24px; letter-spacing: 2px; border-bottom-left-radius: 15px; border-bottom-right-radius: 15px; font-style: italic;
+            background-color: rgba(255, 50, 50, 0.2); color: #ff5555; border: 2px solid #ff5555; 
+            font-family: '{self.tech_font}'; font-size: 24px; letter-spacing: 2px; 
+            border-bottom-left-radius: 15px; border-bottom-right-radius: 15px; font-style: italic;
         """)
-        main.set_ui_callback(self.update_log_threadsafe)
-        main.set_close_callback(self.request_close_threadsafe)
-        main.set_ui_state_callback(self.update_state_threadsafe)
+        
+        # Pass callbacks directly to the core instance
+        self.cypher.set_callbacks(
+            self.update_log_threadsafe, 
+            self.request_close_threadsafe, 
+            self.update_state_threadsafe
+        )
         
         self.update_log_threadsafe("Initializing Neural Network...")
-        
-        # FIX 2: Save the thread to 'self.ai_thread' so we can track it
         self.ai_thread = threading.Thread(target=self.run_ai)
         self.ai_thread.daemon = True
         self.ai_thread.start()
 
-
     def stop_system(self):
-        main.stop_execution()
+        self.cypher.stop_execution() # Use instance method
         self.core.is_active = False
         self.core.set_state("idle")
         self.btn_action.setText("INITIATE PROTOCOL")
         self.btn_action.setStyleSheet(f"""
-            background-color: rgba(0, 217, 246, 0.1); color: {COLOR_ACCENT}; border: 2px solid {COLOR_ACCENT}; font-family: '{self.tech_font}'; font-size: 24px; letter-spacing: 2px; border-bottom-left-radius: 15px; border-bottom-right-radius: 15px; font-style: italic;
+            background-color: rgba(0, 217, 246, 0.1); color: {COLOR_ACCENT}; border: 2px solid {COLOR_ACCENT}; 
+            font-family: '{self.tech_font}'; font-size: 24px; letter-spacing: 2px; 
+            border-bottom-left-radius: 15px; border-bottom-right-radius: 15px; font-style: italic;
         """)
-        # FIX 3: Emit directly so it bypasses the shields we are about to build
         self.terminal.log("System Halted.")
 
     def run_ai(self):
         try:
-            main.check_env_variable()
-            main.load_memory()
-            main.activateAssistant()
+            self.cypher.check_env_variable()
+            self.cypher.load_memory()
+            self.cypher.activate_assistant()
         except Exception as e:
             self.update_log_threadsafe(f"CRITICAL ERROR: {e}")
 
