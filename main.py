@@ -32,457 +32,14 @@ import json
 import speedtest
 from groq import Groq
 import wikipedia
-import re 
+import re
 
 load_dotenv()
-ui_print = print
-close_callback = None
-ui_state_callback = None
-is_running = True
 
-# Global API Clients
-gemini_client = None
-groq_client = None
-
-# global flags
-speech_thread = None
-stop_speaking = False
-speech_id_counter = 0
-chat_history = []
-ai_thread = None
-ai_result = None
-ai_thinking = False
-current_channel = None
-speech_lock = threading.Lock()
-
-# Alarm Flag
-alarm_event = threading.Event()
-
-# --- CONFIGURATION ---
-# Lower value = More sensitive mic (Faster pickup)
+# --- CONSTANTS & DICTIONARIES ---
 ERROR_THRESHOLD = 300
-
-#Configure the recognizer:
-recognizer = sr.Recognizer()
-recognizer.energy_threshold = ERROR_THRESHOLD
-recognizer.dynamic_energy_threshold = True
-
-# Adjust the pause threshold for faster processing after you stop speaking
-# A lower value (e.g., 0.8) means it will process faster.
-recognizer.pause_threshold = 0.8  
-
-# --- NEW: DEDICATED TTS EVENT LOOP (Speed Optimization) ---
-# This creates a permanent background thread for generating audio.
-tts_loop = asyncio.new_event_loop()
-
-def start_tts_loop(loop):
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
-
-# Start the TTS loop immediately
-t = threading.Thread(target=start_tts_loop, args=(tts_loop,), daemon=True)
-t.start()
-
-# --- OPTIMIZED MIXER SETUP ---
-try:
-    if pygame.mixer.get_init():
-        pygame.mixer.quit()
-    pygame.mixer.init(frequency=24000, channels=1)
-except Exception as e:
-    print("Pygame Mixer Initialization Error:", e)
-
-
-def set_ui_callback(func):
-    global ui_print
-    ui_print = func
-
-def set_close_callback(func):
-    global close_callback
-    close_callback = func
-
-def set_ui_state_callback(func):
-    global ui_state_callback
-    ui_state_callback = func
-
-def set_ui_state(state):
-    """Updates the UI state (idle, listening, processing)"""
-    if ui_state_callback:
-        ui_state_callback(state)
-
-def stop_execution():
-    global is_running, stop_speaking
-    is_running = False
-    stop_speaking = True
-    if pygame.mixer.get_init():
-        pygame.mixer.stop()
-    ui_print("System halting...")
-
-# function for checking environment variable
-def check_env_variable():
-    global gemini_client, groq_client
-    print("Performing system checks...")
-    required_keys = [
-        "GEMINI_API_KEY",
-        "GROQ_API_KEY",
-        "OPENWEATHER_KEY",
-        "NEWS_API_KEY",
-        "EMAIL_USER",
-        "EMAIL_PASS",
-    ]
-    missing_keys = [key for key in required_keys if not os.getenv(key)]
-    if missing_keys:
-        print(f"Warning: The following environment variables are missing: {', '.join(missing_keys)}")
-    
-    if os.getenv("GEMINI_API_KEY"):
-        gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    if os.getenv("GROQ_API_KEY"):
-        groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        
-    if not os.path.exists("contact.db"):
-        print("Warning: contact.db database file is missing.")
-    init_db()
-
-def init_db():
-    """Creates the contact database and tables with UNIQUE constraints."""
-    conn = sqlite3.connect("contact.db")
-    cursor = conn.cursor()
-    # Create WhatsApp table with UNIQUE name constraint
-    cursor.execute('''CREATE TABLE IF NOT EXISTS contacts 
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, phone_number TEXT)''')
-    # Create Email table with UNIQUE name constraint
-    cursor.execute('''CREATE TABLE IF NOT EXISTS email_contacts 
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, email TEXT)''')
-    conn.commit()
-    conn.close()
-
-def addContact():
-    speak("Do you want to save a WhatsApp number, or an Email address?")
-    wait_until_silent()
-    contact_type = speakToText().lower()
-    
-    if not contact_type:
-        return
-        
-    if "whatsapp" in contact_type or "number" in contact_type or "phone" in contact_type:
-        speak("What is the name of the contact?")
-        wait_until_silent()
-        name = speakToText()
-        if not name:
-            speak("I didn't catch the name. Cancelling.")
-            return
-            
-        speak("What is the phone number?")
-        wait_until_silent()
-        number_spoken = speakToText()
-        
-        # Clean up number and validate exactly 10 digits starting with 6-9
-        clean_number = "".join(filter(str.isdigit, number_spoken))
-        
-        if len(clean_number) > 10 and clean_number.startswith("91"):
-            clean_number = clean_number[2:]
-        elif len(clean_number) == 11 and clean_number.startswith("0"):
-            clean_number = clean_number[1:]
-
-        if not re.match(r"^[6-9]\d{9}$", clean_number):
-            speak("That doesn't seem to be a valid 10-digit mobile number. Cancelling.")
-            return
-            
-        # Save to DB
-        try:
-            conn = sqlite3.connect("contact.db")
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT id FROM contacts WHERE name=?", (name.lower(),))
-            if cursor.fetchone():
-                cursor.execute("UPDATE contacts SET phone_number=? WHERE name=?", (clean_number, name.lower()))
-                speak(f"Updated existing WhatsApp number for {name}.")
-            else:
-                cursor.execute("INSERT INTO contacts (name, phone_number) VALUES (?, ?)", (name.lower(), clean_number))
-                speak(f"Successfully saved WhatsApp number for {name}.")
-                
-            conn.commit()
-        except sqlite3.Error as e:
-            speak("A database error occurred.")
-            print(f"DB Error: {e}")
-        finally:
-            if 'conn' in locals():
-                conn.close()
-        
-    elif "email" in contact_type:
-        speak("What is the name of the contact?")
-        wait_until_silent()
-        name = speakToText()
-        if not name:
-            speak("I didn't catch the name. Cancelling.")
-            return
-            
-        speak("What is the email address? Say 'at' and 'dot' where appropriate.")
-        wait_until_silent()
-        email_spoken = speakToText().lower()
-        
-        clean_email = email_spoken.replace(" at ", "@").replace(" dot ", ".").replace(" ", "")
-        
-        pattern = r'^[\w\.-]+@[\w\.-]+\.\w+$'
-        if not re.match(pattern, clean_email):
-            speak("That email address format is invalid. Cancelling.")
-            return
-        
-        # Save to DB
-        try:
-            conn = sqlite3.connect("contact.db")
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT id FROM email_contacts WHERE name=?", (name.lower(),))
-            if cursor.fetchone():
-                cursor.execute("UPDATE email_contacts SET email=? WHERE name=?", (clean_email, name.lower()))
-                speak(f"Updated existing email address for {name}.")
-            else:
-                cursor.execute("INSERT INTO email_contacts (name, email) VALUES (?, ?)", (name.lower(), clean_email))
-                speak(f"Successfully saved email address for {name}.")
-                
-            conn.commit()
-        except sqlite3.Error as e:
-            speak("A database error occurred.")
-            print(f"DB Error: {e}")
-        finally:
-            if 'conn' in locals():
-                conn.close()
-        
-    else:
-        speak("I didn't understand the contact type. Please try again.")
-
-# --- OPTIMIZED SPEAK FUNCTION ---
-def speak(text):
-    global speech_thread, stop_speaking, speech_id_counter
-
-    with speech_lock:
-        if pygame.mixer.get_init():
-            pygame.mixer.stop()
-            pygame.mixer.music.stop()
-
-        speech_id_counter += 1
-        my_id = speech_id_counter
-        stop_speaking = False
-
-    set_ui_state("processing")
-
-    def run_wrapper():
-        target_source = io.BytesIO()
-
-        try:
-            communicate = edge_tts.Communicate(text, "hi-IN-SwaraNeural", rate="+20%")
-
-            async def collect_audio():
-                async for chunk in communicate.stream():
-                    if my_id != speech_id_counter:
-                        return
-                    if chunk["type"] == "audio":
-                        target_source.write(chunk["data"])
-
-            future = asyncio.run_coroutine_threadsafe(collect_audio(), tts_loop)
-            future.result()
-
-            if my_id != speech_id_counter:
-                return
-
-            target_source.seek(0)
-
-        except Exception as e:
-            set_ui_state("idle")
-            return
-
-        try:
-            if not pygame.mixer.get_init():
-                set_ui_state("idle")
-                return
-                
-            sound = pygame.mixer.Sound(file=target_source)
-
-            if my_id != speech_id_counter:
-                return
-            ui_print(f"CYPHER: {text}")
-            
-            channel = pygame.mixer.Channel(0)
-            channel.play(sound)
-
-            while channel.get_busy():
-                if stop_speaking or my_id != speech_id_counter:
-                    channel.stop()
-                    break
-                time.sleep(0.05)
-
-        except Exception as e:
-            print(f"Playback Error: {e}")
-        finally:
-            if my_id == speech_id_counter:
-                set_ui_state("idle")
-
-    speech_thread = threading.Thread(target=run_wrapper, daemon=True)
-    speech_thread.start()
-
-def wait_until_silent():
-    if speech_thread and speech_thread.is_alive():
-        speech_thread.join(timeout=10)
-
-def stopSpeaking():
-    global stop_speaking
-    stop_speaking = True
-    if pygame.mixer.get_init():
-        pygame.mixer.stop()  # Stops all active Sound channels
-        pygame.mixer.music.stop()  # Stops any background music
-
-k.add_hotkey("esc", stopSpeaking)
-
-def okSir():
-    speak("Okay sir")
-    return
-
 HISTORY_FILE = "chat_memory.json"
 
-def save_memory():
-    """Saves the current chat history to a file, limiting size to prevent bloat."""
-    global chat_history
-    MAX_HISTORY = 30
-    
-    # If history exceeds limit, keep the first 4 (System Rules) and the newest messages
-    if len(chat_history) > MAX_HISTORY:
-        chat_history = chat_history[:4] + chat_history[-(MAX_HISTORY - 4):]
-        
-    try:
-        with open(HISTORY_FILE, "w") as f:
-            json.dump(chat_history, f)
-    except Exception as e:
-        print(f"Memory Save Error: {e}")
-
-def load_memory():
-    """Loads chat history from file on startup"""
-    global chat_history
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, "r") as f:
-                chat_history = json.load(f)
-            print("Previous chat history loaded.")
-            return
-        except Exception as e:
-            print("Memory corrupted, starting fresh.")
-
-    init_chat()
-
-def init_chat():
-    global chat_history
-    chat_history = [
-        {"role": "user", "parts": [{"text": "You are CYPHER, a stylish, empathetic, and witty AI assistant. Speak in a mix of English and Hindi (Hinglish) when appropriate, and always address the user as 'Sir'."}]},
-        {"role": "model", "parts": [{"text": "Namaste Sir. Systems are online. I am Cypher, ready to assist."}]},
-        {"role": "user", "parts": [{"text": "You are CYPHER, created by Pratik Pattanayak."}]},
-        {"role": "user", "parts": [{"text": "CRITICAL RULE: You must always give extremely short, punchy, and direct responses. NEVER exceed 1 or 2 sentences unless I explicitly ask you for a detailed explanation. Do not use markdown formatting. Be quick and conversational."}]},
-    ]
-
-def reset_chat():
-    """Clears memory and deletes the file"""
-    init_chat()
-    save_memory()  # Overwrite the file with the fresh start
-    speak("Memory Cleared. Starting fresh.")
-
-def aiProcess(prompt):
-    global chat_history, gemini_client, groq_client
-    
-    if not gemini_client and not groq_client:
-        return "System Warning: Both primary and backup AI modules are missing their API keys."
-    
-    # 1. Add user prompt to memory first
-    chat_history.append({"role": "user", "parts": [{"text": prompt}]})
-    
-    try:
-        if not gemini_client:
-            raise Exception("Gemini Client not initialized.")
-            
-        # --- ATTEMPT 1: PRIMARY BRAIN (GEMINI) ---
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash", contents=chat_history
-        )
-        reply = response.text.strip().replace("*", "").replace("#", "").replace("`", "")
-        
-        chat_history.append({"role": "model", "parts": [{"text": reply}]})
-        save_memory()
-        return reply
-
-    except Exception as gemini_error:
-        print(f"Gemini Brain Offline ({gemini_error}). Switching to Groq Backup...")
-        
-        try:
-            if not groq_client:
-                raise Exception("Groq Client not initialized.")
-                
-            # --- ATTEMPT 2: BACKUP BRAIN (GROQ) ---
-            groq_history = []
-            for msg in chat_history:
-                role = "assistant" if msg["role"] == "model" else "user"
-                content = msg["parts"][0]["text"]
-                groq_history.append({"role": role, "content": content})
-                
-            groq_response = groq_client.chat.completions.create(
-                messages=groq_history,
-                model="llama-3.3-70b-versatile" 
-            )
-            
-            reply = groq_response.choices[0].message.content.strip().replace("*", "").replace("#", "").replace("`", "")
-            
-            chat_history.append({"role": "model", "parts": [{"text": reply}]})
-            save_memory()
-            return reply
-            
-        except Exception as groq_error:
-            print(f"Groq Brain Offline: {groq_error}")
-            
-            if chat_history and chat_history[-1]["role"] == "user":
-                chat_history = chat_history[:-1]
-            return "I have lost connection to both my primary and backup servers, sir."
-
-def speak_while_thinking(prompt):
-    res = aiProcess(prompt)
-    if res:
-        speak(res)
-        wait_until_silent()
-
-def speakToText(retries=3):
-    for _ in range(retries):
-        set_ui_state("listening")
-        try:
-            fs = 16000  
-            duration = 5  
-            print("Listening...")
-            
-            try:
-                recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
-                sd.wait()
-            except ValueError:
-                fs = 44100 
-                recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
-                sd.wait()
-            
-            set_ui_state("processing")
-            audio_data = sr.AudioData(recording.tobytes(), fs, 2)
-            
-            text = recognizer.recognize_google(audio_data, language="en-IN")
-            ui_print(f"USER: {text}")
-            
-            set_ui_state("idle")
-            return text
-            
-        except sr.UnknownValueError:
-            set_ui_state("idle")
-            speak("I didn't catch that, Sir.")
-            wait_until_silent()
-            continue
-        except Exception as e:
-            print(f"Mic Error: {e}")
-            set_ui_state("idle")
-            break
-            
-    set_ui_state("idle")
-    return ""
-
-# --- COMMAND ROUTING DICTIONARIES ---
 WEB_LINKS = {
     "google": "https://www.google.com",
     "facebook": "https://www.facebook.com",
@@ -508,23 +65,24 @@ HOTKEYS = {
     "paste": ["ctrl", "v"],
     "cut": ["ctrl", "x"],
     "find": ["ctrl", "f"],
-    "take screenshot": ["printscreen"],    # PrtSc Key
-    "open emoji": ["win", "."],            # F1 Key (Windows Emoji Panel)
-    "mute microphone": ["win", "alt", "k"] # F8 Key (Windows 11 Mic Toggle)
+    "take screenshot": ["printscreen"],
+    "open emoji": ["win", "."],
+    "mute microphone": ["win", "alt", "k"]
 }
 
 MEDIA_KEYS = {
     "volume up": "volumeup",
     "volume down": "volumedown",
     "volume mute": "volumemute",
-    "mute": "volumemute",                # Shorter command for F5
+    "mute": "volumemute",
     "play music": "playpause",
     "pause music": "playpause",
     "next song": "nexttrack",
     "previous song": "prevtrack",
-    "brightness up": "brightnessup",     # F3 Key
-    "brightness down": "brightnessdown"  # F2 Key
+    "brightness up": "brightnessup",
+    "brightness down": "brightnessdown"
 }
+
 APPS_NAMES = {
     "chrome": "Google Chrome",
     "edge": "Microsoft Edge",
@@ -542,634 +100,1019 @@ APPS_NAMES = {
     "file explorer" : "File Explorer",
 }
 
-def openApp(app):
-    try:
-        pyautogui.hotkey("win", "s")
-        time.sleep(0.15) 
-        pyautogui.write(app, interval=0.01) 
-        time.sleep(0.15) 
-        k.press_and_release("enter")
-    except Exception as e:
-        print(e)
-        speak("Unable to open application.")
+class CypherCore:
+    def __init__(self):
+        # UI Callbacks
+        self.ui_print = print
+        self.close_callback = None
+        self.ui_state_callback = None
+        
+        # System Flags
+        self.is_running = False
+        self.stop_speaking_flag = False
+        self.speech_id_counter = 0
+        self.chat_history = []
+        
+        # API Clients
+        self.gemini_client = None
+        self.groq_client = None
 
-def processCommand(c):
-    c_lower = c.lower()
-    ui_print(f"Processing: {c}")
-    
-    # 1. Check simple Website Links automatically
-    for site, url in WEB_LINKS.items():
-        if site in c_lower:
-            speak(f"Opening {site}, Sir.")
-            wait_until_silent()
-            return webbrowser.open(url)
+        # Threading & Concurrency
+        self.speech_thread = None
+        self.speech_lock = threading.Lock()
+        self.alarm_event = threading.Event()
 
-    # 2. Check Keyboard Shortcuts automatically
-    for trigger, keys in HOTKEYS.items():
-        if trigger in c_lower:
-            speak(f"Executing {trigger}, Sir.")
-            wait_until_silent()
-            return pyautogui.hotkey(*keys)
+        # Audio Recognition Setup
+        self.recognizer = sr.Recognizer()
+        self.recognizer.energy_threshold = ERROR_THRESHOLD
+        self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.pause_threshold = 0.8  
 
-    # 3. Check Media/System Keys automatically
-    for key, media_key in MEDIA_KEYS.items():
-        if key in c_lower:
-            speak("Right away, Sir.")
-            wait_until_silent()
-            return pyautogui.press(media_key)
+        # TTS Event Loop
+        self.tts_loop = asyncio.new_event_loop()
+        threading.Thread(target=self._start_tts_loop, daemon=True).start()
 
-    # 4. Handle Complex Commands & App Integrations
-    if "open" in c_lower:
-        app_name = c_lower.replace("open", "").strip()
-        actual_app_name = APPS_NAMES.get(app_name, app_name)
-        speak(f"Opening {actual_app_name}, Sir.")
-        wait_until_silent()
-        openApp(actual_app_name)
-        
-    elif "type what i say" in c_lower:
-        speak("What do you want to type?")
-        wait_until_silent()
-        text = speakToText()
-        if text:
-            pyautogui.typewrite(text)
-            pyautogui.press("enter")
-            
-    elif "put on sleep" in c_lower:
-        pyautogui.hotkey("win", 'x')
-        time.sleep(0.2)
-        pyautogui.press('u')
-        time.sleep(0.2)
-        pyautogui.press('s')
-        
-    elif "shutdown" in c_lower:
-        speak("Are you sure you want to shut down the computer, Sir? Say yes to confirm.")
-        wait_until_silent()
-        confirmation = speakToText()
-        if "yes" in confirmation:
-            speak("Shutting down.")
-            os.system("shutdown /s /t 1")
-        else:
-            speak("Shutdown cancelled.") 
-        
-    elif "restart" in c_lower:
-        speak("Are you sure you want to restart the system, Sir? Say yes to confirm.")
-        wait_until_silent()
-        confirmation = speakToText()
-        if "yes" in confirmation:
-            speak("Restarting.")
-            os.system("shutdown /r /t 1")
-        else:
-            speak("Restart cancelled.")
-        
-    elif "weather" in c_lower:
-        city = c_lower.split("in")[-1].strip() if "in" in c_lower else "Mumbai"
-        res = getWeather(city)
-        speak(res)
-        wait_until_silent()
-        
-    elif "send email" in c_lower:
-        sendMail()
-        
-    elif "check email" in c_lower or "read email" in c_lower:
-        check_emails()
-        
-    elif "check internet speed" in c_lower:
-        res = check_internet_speed()
-        speak(res)
-        wait_until_silent()
-        
-    elif "news" in c_lower:
-        speak(getNews())
-        wait_until_silent()
-        
-    elif "send message on whatsapp" in c_lower:
-        threading.Thread(target=sendWhatsAppMessage, daemon=True).start()
-    
-    elif "add contact" in c_lower or "save contact" in c_lower or "new contact" in c_lower:
-        addContact()
-        
-    elif "wikipedia" in c_lower:
-        # 1. Clean the text here in the router!
-        topic = re.sub(r"(search wikipedia for|wikipedia|who is|what is)", "", c_lower).strip()
-        
-        # 2. If it's empty, ask the user
-        if not topic:
-            speak("What is the topic?")
-            wait_until_silent()
-            topic = speakToText()
-            
-        # 3. Pass the perfectly clean topic to the worker
-        if topic:
-            speak(f"Searching Wikipedia for {topic}, Sir.")
-            wait_until_silent()
-            speak(search_wikipedia(topic))
-            wait_until_silent()
-            
-    # 5. Basic Chat & Status Checks
-    elif any(phrase in c_lower for phrase in ["new session", "reset chat", "clear history"]):
-        reset_chat()
-        
-    elif "time" in c_lower:
-        speak(f"The current time is {datetime.now().strftime('%H:%M')}")
-        
-    elif "date" in c_lower:
-        speak(f"Today's date is {datetime.now().strftime('%B %d, %Y')}")
-        
-    elif "day" in c_lower:
-        speak(f"Today is {datetime.now().strftime('%A')}")
-        
-    elif "are you there" in c_lower:
-        speak("Yes sir, I am here.")
-        
-    elif "turn off" in c_lower or "stop" in c_lower:
-        if "stop speaking" in c_lower or c_lower.strip() == "stop":
-            stopSpeaking()
-        else:
-            shutdown_sequence()
-    elif "set alarm" in c_lower:
-        speak("At what time should I set the alarm, Sir? Please say it in HH:MM format.")
-        wait_until_silent()
-        alarm_time = speakToText()
-        alarm_time = alarm_time.replace(" ", "").replace(".", ":")
+        # Hotkeys
+        k.add_hotkey("esc", self.stop_speaking)
+
+        # Pygame Mixer Setup
         try:
-            datetime.strptime(alarm_time, "%H:%M")
-            speak(f"Setting alarm for {alarm_time}, Sir.")
-            setAlarm(alarm_time)
-        except ValueError:
-            speak("I received an invalid time format. Cancelling alarm.")
-            
-    elif "cancel alarm" in c_lower or "stop alarm" in c_lower:
-        alarm_event.set()
-        speak("The active alarm has been cancelled, Sir.")
-      
-    # 6. Fallback to Gemini/Groq Brain
-    else:
-        conversational_words = ["hello", "hi", "hey", "thanks", "yes", "no", "why", "who", "what", "wow"]
+            if pygame.mixer.get_init():
+                pygame.mixer.quit()
+            pygame.mixer.init(frequency=24000, channels=1)
+        except Exception as e:
+            print("Pygame Mixer Initialization Error:", e)
+
+    def _start_tts_loop(self):
+        """Starts the asyncio event loop for TTS in a separate thread."""
+        asyncio.set_event_loop(self.tts_loop)
+        self.tts_loop.run_forever()
+
+    def set_callbacks(self, ui_print_fn, close_fn, state_fn):
+        """Sets the UI callbacks for printing, closing, and state updates."""
+        if ui_print_fn: 
+            self.ui_print = ui_print_fn
+        if close_fn: 
+            self.close_callback = close_fn
+        if state_fn: 
+            self.ui_state_callback = state_fn
+
+    def set_ui_state(self, state):
+        """Updates the UI state through the callback."""
+        if self.ui_state_callback:
+            self.ui_state_callback(state)
+
+    def stop_execution(self):
+        """Stops all ongoing processes, including speech and resets flags."""
+        self.is_running = False
+        self.stop_speaking_flag = True
+        if pygame.mixer.get_init():
+            pygame.mixer.stop()
+        self.ui_print("System halting...")
+
+    def stop_speaking(self):
+        """Sets the flag to stop any ongoing speech and halts audio playback."""
+        self.stop_speaking_flag = True
+        if pygame.mixer.get_init():
+            pygame.mixer.stop()
+            pygame.mixer.music.stop()
+
+    def ok_sir(self):
+        self.speak("Okay sir")
+
+    def check_env_variable(self):
+        """Checks for required environment variables and initializes API clients."""
+        self.ui_print("Performing system checks...")
+        required_keys = [
+            "GEMINI_API_KEY", 
+            "GROQ_API_KEY", 
+            "OPENWEATHER_KEY", 
+            "NEWS_API_KEY", 
+            "EMAIL_USER", 
+            "EMAIL_PASS"
+        ]
+        missing_keys = [key for key in required_keys if not os.getenv(key)]
         
-        # If it's a single word, AND it's not a normal conversational word, block it.
-        if len(c.split()) < 2 and c_lower not in conversational_words:
-            speak("Could you please be more specific, Sir?")
-            wait_until_silent()
-        else:
-            set_ui_state("processing")
-            speak_while_thinking(c)
+        if missing_keys:
+            self.ui_print(f"Warning: The following environment variables are missing: {', '.join(missing_keys)}")
+        
+        if os.getenv("GEMINI_API_KEY"):
+            self.gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        if os.getenv("GROQ_API_KEY"):
+            self.groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+            
+        if not os.path.exists("contact.db"):
+            self.ui_print("Warning: contact.db database file is missing.")
+        self.init_db()
 
-# --- UPDATED GREET FUNCTION ---
-def greet():
-    hour = int(datetime.now().hour)
-    greeting = ""
-
-    # Logic to determine the correct time of day
-    if hour >= 0 and hour < 5:
-        greeting = "You are up late, Sir."
-    elif hour >= 5 and hour < 12:
-        greeting = "Good Morning, Sir."
-    elif hour >= 12 and hour < 18:
-        greeting = "Good Afternoon, Sir."
-    else:
-        greeting = "Good Evening, Sir."
-
-    speak(f"{greeting} I am Cypher. How may I assist you?")
-
-
-def shutdown_sequence():
-    farewell_messages = [
-        "Powering down all systems. Have a productive day, Sir.",
-        "Disconnecting from the mainframe. Namaste, Sir.",
-        "Shutting down. I will be ready when you need me next.",
-        "Going offline. Take care, Sir.",
-        "System hibernation initiated. Goodbye.",
-    ]
-    choice = random.choice(farewell_messages)
-    speak(choice)
-    wait_until_silent()
-    if close_callback:
-        close_callback()
-
-
-# fetching email from database
-def get_email_from_db(name_spoken):
-    try:
+    def init_db(self):
+        """Initializes the SQLite database and creates necessary tables if they don't exist."""
         conn = sqlite3.connect("contact.db")
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT email FROM email_contacts WHERE LOWER(name) = ?",
-            (name_spoken.lower().strip(),)
-        )
-        result = cursor.fetchone()
-        return result[0] if result else None
-    except sqlite3.Error as e:
-        print(f"Database Error: {e}")
-        return None
-    finally:
-        if 'conn' in locals():
-            conn.close()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, phone_number TEXT)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS email_contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, email TEXT)''')
+        conn.commit()
+        conn.close()
 
+    def add_contact(self):
+        """Guides the user through adding a new contact, either a WhatsApp number or an email address, and saves it to the database."""
+        self.speak("Do you want to save a WhatsApp number, or an Email address?")
+        self.wait_until_silent()
+        contact_type = self.listen().lower()
+        
+        if not contact_type: 
+            return
+            
+        if "whatsapp" in contact_type or "number" in contact_type or "phone" in contact_type:
+            self.speak("What is the name of the contact?")
+            self.wait_until_silent()
+            name = self.listen()
+            if not name:
+                self.speak("I didn't catch the name. Cancelling.")
+                return
+                
+            self.speak("What is the phone number?")
+            self.wait_until_silent()
+            number_spoken = self.listen()
+            
+            clean_number = "".join(filter(str.isdigit, number_spoken))
+            
+            if len(clean_number) > 10 and clean_number.startswith("91"):
+                clean_number = clean_number[2:]
+            elif len(clean_number) == 11 and clean_number.startswith("0"):
+                clean_number = clean_number[1:]
 
-# send mail function
-def sendMail():
-    speak("Whom do you want to email?")
-    wait_until_silent()
-    name = speakToText()
-    if not name:
-        speak("I didn't hear a name.")
-        return
+            if not re.match(r"^[6-9]\d{9}$", clean_number):
+                self.speak("That doesn't seem to be a valid 10-digit mobile number. Cancelling.")
+                return
+                
+            try:
+                conn = sqlite3.connect("contact.db")
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM contacts WHERE name=?", (name.lower(),))
+                if cursor.fetchone():
+                    cursor.execute("UPDATE contacts SET phone_number=? WHERE name=?", (clean_number, name.lower()))
+                    self.speak(f"Updated existing WhatsApp number for {name}.")
+                else:
+                    cursor.execute("INSERT INTO contacts (name, phone_number) VALUES (?, ?)", (name.lower(), clean_number))
+                    self.speak(f"Successfully saved WhatsApp number for {name}.")
+                conn.commit()
+            except sqlite3.Error as e:
+                self.speak("A database error occurred.")
+                print(f"DB Error: {e}")
+            finally:
+                if 'conn' in locals(): 
+                    conn.close()
+            
+        elif "email" in contact_type:
+            self.speak("What is the name of the contact?")
+            self.wait_until_silent()
+            name = self.listen()
+            if not name:
+                self.speak("I didn't catch the name. Cancelling.")
+                return
+                
+            self.speak("What is the email address? Say 'at' and 'dot' where appropriate.")
+            self.wait_until_silent()
+            email_spoken = self.listen().lower()
+            
+            clean_email = email_spoken.replace(" at ", "@").replace(" dot ", ".").replace(" ", "")
+            pattern = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+            if not re.match(pattern, clean_email):
+                self.speak("That email address format is invalid. Cancelling.")
+                return
+            
+            try:
+                conn = sqlite3.connect("contact.db")
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM email_contacts WHERE name=?", (name.lower(),))
+                if cursor.fetchone():
+                    cursor.execute("UPDATE email_contacts SET email=? WHERE name=?", (clean_email, name.lower()))
+                    self.speak(f"Updated existing email address for {name}.")
+                else:
+                    cursor.execute("INSERT INTO email_contacts (name, email) VALUES (?, ?)", (name.lower(), clean_email))
+                    self.speak(f"Successfully saved email address for {name}.")
+                conn.commit()
+            except sqlite3.Error as e:
+                self.speak("A database error occurred.")
+                print(f"DB Error: {e}")
+            finally:
+                if 'conn' in locals(): 
+                    conn.close()
+            
+        else:
+            self.speak("I didn't understand the contact type. Please try again.")
 
-    email_address = get_email_from_db(name)
+    def speak(self, text):
+        """Converts text to speech using edge-tts, plays it back, and handles interruption and UI state updates."""
+        with self.speech_lock:
+            if pygame.mixer.get_init():
+                pygame.mixer.stop()
+                pygame.mixer.music.stop()
 
-    if email_address:
-        while True:
-            wait_until_silent()
-            mail_subject = getMailSubject()
-            if mail_subject:
+            self.speech_id_counter += 1
+            my_id = self.speech_id_counter
+            self.stop_speaking_flag = False
+
+        self.set_ui_state("processing")
+
+        def run_wrapper():
+            """Wrapper function to run TTS and playback in a separate thread."""
+            target_source = io.BytesIO()
+            try:
+                communicate = edge_tts.Communicate(text, "hi-IN-SwaraNeural", rate="+20%")
+                async def collect_audio():
+                    async for chunk in communicate.stream():
+                        if my_id != self.speech_id_counter: 
+                            return
+                        if chunk["type"] == "audio":
+                            target_source.write(chunk["data"])
+
+                future = asyncio.run_coroutine_threadsafe(collect_audio(), self.tts_loop)
+                future.result()
+
+                if my_id != self.speech_id_counter: 
+                    return
+                target_source.seek(0)
+            except Exception as e:
+                self.set_ui_state("idle")
+                return
+
+            try:
+                if not pygame.mixer.get_init():
+                    self.set_ui_state("idle")
+                    return
+                    
+                sound = pygame.mixer.Sound(file=target_source)
+
+                if my_id != self.speech_id_counter: 
+                    return
+                self.ui_print(f"CYPHER: {text}")
+                
+                channel = pygame.mixer.Channel(0)
+                channel.play(sound)
+
+                while channel.get_busy():
+                    if self.stop_speaking_flag or my_id != self.speech_id_counter:
+                        channel.stop()
+                        break
+                    time.sleep(0.05)
+            except Exception as e:
+                print(f"Playback Error: {e}")
+            finally:
+                if my_id == self.speech_id_counter:
+                    self.set_ui_state("idle")
+
+        self.speech_thread = threading.Thread(target=run_wrapper, daemon=True)
+        self.speech_thread.start()
+
+    def wait_until_silent(self):
+        """Blocks until the current speech has finished playing or is interrupted."""
+        if self.speech_thread and self.speech_thread.is_alive():
+            self.speech_thread.join(timeout=10)
+
+    def listen(self, retries=3):
+        """Listens to the user's voice input, processes it with speech recognition, and returns the transcribed text. Handles retries and errors gracefully."""
+        for _ in range(retries):
+            self.set_ui_state("listening")
+            try:
+                fs = 16000  
+                duration = 5  
+                print("Listening...")
+                
+                try:
+                    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
+                    sd.wait()
+                except ValueError:
+                    fs = 44100 
+                    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
+                    sd.wait()
+                
+                self.set_ui_state("processing")
+                audio_data = sr.AudioData(recording.tobytes(), fs, 2)
+                
+                text = self.recognizer.recognize_google(audio_data, language="en-IN")
+                self.ui_print(f"USER: {text}")
+                
+                self.set_ui_state("idle")
+                return text
+                
+            except sr.UnknownValueError:
+                self.set_ui_state("idle")
+                self.speak("I didn't catch that, Sir.")
+                self.wait_until_silent()
+                continue
+            except Exception as e:
+                print(f"Mic Error: {e}")
+                self.set_ui_state("idle")
                 break
+                
+        self.set_ui_state("idle")
+        return ""
 
-        while True:
-            wait_until_silent()
-            mail_body = getMailBody()
-            if mail_body:
-                break
+    def save_memory(self):
+        """Saves the current chat history to a JSON file, ensuring that the history does not exceed a certain length to manage memory effectively."""
+        MAX_HISTORY = 30
+        if len(self.chat_history) > MAX_HISTORY:
+            self.chat_history = self.chat_history[:4] + self.chat_history[-(MAX_HISTORY - 4):]
+            
+        try:
+            with open(HISTORY_FILE, "w") as f:
+                json.dump(self.chat_history, f)
+        except Exception as e:
+            print(f"Memory Save Error: {e}")
 
-        send_email_smtp(email_address, mail_subject, mail_body)
-    else:
-        speak(f"I couldn't find an email for {name}")
+    def load_memory(self):
+        """Loads the chat history from a JSON file if it exists, otherwise initializes a new chat history. Handles potential corruption of the memory file gracefully."""
+        if os.path.exists(HISTORY_FILE):
+            try:
+                with open(HISTORY_FILE, "r") as f:
+                    self.chat_history = json.load(f)
+                print("Previous chat history loaded.")
+                return
+            except Exception as e:
+                print("Memory corrupted, starting fresh.")
+        self.init_chat()
 
-# mail body
-def getMailBody():
-    speak("What should I say in the email?")
-    wait_until_silent()
-    body = speakToText()
-    return body
+    def init_chat(self):
+        """Initializes the chat history with a predefined system prompt and user instructions to set the tone and behavior of the AI assistant."""
+        self.chat_history = [
+            {"role": "user", "parts": [{"text": "You are CYPHER, a stylish, empathetic, and witty AI assistant. Speak in a mix of English and Hindi (Hinglish) when appropriate, and always address the user as 'Sir'."}]},
+            {"role": "model", "parts": [{"text": "Namaste Sir. Systems are online. I am Cypher, ready to assist."}]},
+            {"role": "user", "parts": [{"text": "You are CYPHER, created by Pratik Pattanayak."}]},
+            {"role": "user", "parts": [{"text": "CRITICAL RULE: You must always give extremely short, punchy, and direct responses. NEVER exceed 1 or 2 sentences unless I explicitly ask you for a detailed explanation. Do not use markdown formatting. Be quick and conversational."}]},
+        ]
 
-# mail subject
-def getMailSubject():
-    speak("What is the subject of the email?")
-    wait_until_silent()
-    subject = speakToText()
-    return subject
+    def reset_chat(self):
+        """Clears the current chat history and resets it to the initial system prompt, effectively starting a new conversation with a clean slate."""
+        self.init_chat()
+        self.save_memory()
+        self.speak("Memory Cleared. Starting fresh.")
 
-def send_email_smtp(to_address, subject, body):
-    from_address = os.getenv("EMAIL_USER")
-    password = os.getenv("EMAIL_PASS")
-    message = f"Subject: {subject}\n\n{body}"
-    server = None
-    
-    try:
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(from_address, password)
-        server.sendmail(from_address, to_address, message)
-        speak("Email has been sent successfully.")
-    except Exception as e:
-        print(e)
-        speak("Sorry, I was unable to send the email.")
-    finally:
-        if server:
-            server.quit()
+    def ai_process(self, prompt):
+        """Processes the user's prompt through the Gemini API, with a fallback to the Groq API in case of failure. Updates the chat history and handles errors gracefully, ensuring that the user is informed of any connectivity issues with the AI modules."""
+        if not self.gemini_client and not self.groq_client:
+            return "System Warning: Both primary and backup AI modules are missing their API keys."
+        
+        self.chat_history.append({"role": "user", "parts": [{"text": prompt}]})
+        
+        try:
+            if not self.gemini_client:
+                raise Exception("Gemini Client not initialized.")
+                
+            response = self.gemini_client.models.generate_content(
+                model="gemini-2.5-flash", contents=self.chat_history
+            )
+            reply = response.text.strip().replace("*", "").replace("#", "").replace("`", "")
+            
+            self.chat_history.append({"role": "model", "parts": [{"text": reply}]})
+            self.save_memory()
+            return reply
 
-# check emails
-def check_emails():
-    try:
-        speak("Checking for new emails, Sir...")
-        wait_until_silent()
+        except Exception as gemini_error:
+            print(f"Gemini Brain Offline ({gemini_error}). Switching to Groq Backup...")
+            
+            try:
+                if not self.groq_client:
+                    raise Exception("Groq Client not initialized.")
+                    
+                groq_history = []
+                for msg in self.chat_history:
+                    role = "assistant" if msg["role"] == "model" else "user"
+                    content = msg["parts"][0]["text"]
+                    groq_history.append({"role": role, "content": content})
+                    
+                groq_response = self.groq_client.chat.completions.create(
+                    messages=groq_history,
+                    model="llama-3.3-70b-versatile" 
+                )
+                
+                reply = groq_response.choices[0].message.content.strip().replace("*", "").replace("#", "").replace("`", "")
+                
+                self.chat_history.append({"role": "model", "parts": [{"text": reply}]})
+                self.save_memory()
+                return reply
+                
+            except Exception as groq_error:
+                print(f"Groq Brain Offline: {groq_error}")
+                if self.chat_history and self.chat_history[-1]["role"] == "user":
+                    self.chat_history = self.chat_history[:-1]
+                return "I have lost connection to both my primary and backup servers, sir."
 
-        mail = imaplib.IMAP4_SSL("imap.gmail.com")
-        mail.login(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASS"))
-        mail.select("inbox")
+    def speak_while_thinking(self, prompt):
+        """Processes the user's prompt through the AI and speaks the response, ensuring that the UI state is updated appropriately and that the user is informed of any delays or issues with the AI response generation."""
+        res = self.ai_process(prompt)
+        if res:
+            self.speak(res)
+            self.wait_until_silent()
 
-        status, messages = mail.search(None, "UNSEEN")
-        email_ids = messages[0].split()
+    def open_app(self, app):
+        """Attempts to open an application by simulating keyboard input to search for the app in the Windows Start menu. Handles potential errors gracefully and informs the user if the application cannot be opened."""
+        try:
+            pyautogui.hotkey("win", "s")
+            time.sleep(0.15) 
+            pyautogui.write(app, interval=0.01) 
+            time.sleep(0.15) 
+            k.press_and_release("enter")
+        except Exception as e:
+            print(e)
+            self.speak("Unable to open application.")
 
-        if not email_ids:
-            speak("You have no new emails, Sir.")
-            wait_until_silent()
+    def greet(self):
+        """Generates a greeting based on the current time of day and speaks it to the user, setting a friendly and personalized tone for the interaction."""
+        hour = int(datetime.now().hour)
+        greeting = ""
+        if hour >= 0 and hour < 5:
+            greeting = "You are up late, Sir."
+        elif hour >= 5 and hour < 12:
+            greeting = "Good Morning, Sir."
+        elif hour >= 12 and hour < 18:
+            greeting = "Good Afternoon, Sir."
+        else:
+            greeting = "Good Evening, Sir."
+        self.speak(f"{greeting} I am Cypher. How may I assist you?")
+
+    def shutdown_sequence(self):
+        """Speaks a random farewell message from a predefined list, waits for the speech to finish, and then triggers the close callback to shut down the system gracefully."""
+        farewell_messages = [
+            "Powering down all systems. Have a productive day, Sir.",
+            "Disconnecting from the mainframe. Namaste, Sir.",
+            "Shutting down. I will be ready when you need me next.",
+            "Going offline. Take care, Sir.",
+            "System hibernation initiated. Goodbye.",
+        ]
+        choice = random.choice(farewell_messages)
+        self.speak(choice)
+        self.wait_until_silent()
+        if self.close_callback:
+            self.close_callback()
+
+    def get_email_from_db(self, name_spoken):
+        """Retrieves an email address from the database based on the spoken name. Handles database errors gracefully and informs the user if a database error occurs."""
+        try:
+            conn = sqlite3.connect("contact.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT email FROM email_contacts WHERE LOWER(name) = ?", (name_spoken.lower().strip(),))
+            result = cursor.fetchone()
+            return result[0] if result else None
+        except sqlite3.Error as e:
+            print(f"Database Error: {e}")
+            self.speak("A database error occurred while retrieving the email address.")
+            return None
+        finally:
+            if 'conn' in locals(): 
+                conn.close()
+
+    def send_mail(self):
+        """Guides the user through sending an email by first asking for the recipient's name, retrieving the email address from the database, and then prompting for the subject and body of the email. Finally, it sends the email using SMTP and handles any errors that may occur during the process."""
+        self.speak("Whom do you want to email?")
+        self.wait_until_silent()
+        name = self.listen()
+        if not name:
+            self.speak("I didn't hear a name.")
             return
 
-        count = len(email_ids)
-        speak(f"You have {count} new emails.")
-        wait_until_silent()
+        email_address = self.get_email_from_db(name)
 
-        for i in range(min(3, count)):
-            latest_email_id = email_ids[-(i + 1)] 
-            _, msg_data = mail.fetch(latest_email_id, "(RFC822)")
+        if email_address:
+            while True:
+                self.wait_until_silent()
+                mail_subject = self.get_mail_subject()
+                if mail_subject:
+                    break
 
-            for response_part in msg_data:
-                if isinstance(response_part, tuple):
-                    msg = email.message_from_bytes(response_part[1])
+            while True:
+                self.wait_until_silent()
+                mail_body = self.get_mail_body()
+                if mail_body: 
+                    break
 
-                    subject_parts = decode_header(msg["Subject"])
-                    subject = "".join(
-                        [
-                            (
-                                part[0].decode(part[1] or "utf-8")
-                                if isinstance(part[0], bytes)
-                                else str(part[0])
-                            )
-                            for part in subject_parts
-                        ]
-                    )
-
-                    from_header = msg.get("From")
-                    if from_header:
-                        from_parts = decode_header(from_header)
-                        from_ = "".join(
-                            [
-                                (
-                                    part[0].decode(part[1] or "utf-8")
-                                    if isinstance(part[0], bytes)
-                                    else str(part[0])
-                                )
-                                for part in from_parts
-                            ]
-                        )
-                        if "<" in from_:
-                            from_ = from_.split("<")[0].strip().replace('"', "")
-                    else:
-                        from_ = "Unknown"
-
-                    speak(f"Email {i+1} from {from_}. Subject: {subject}")
-                    wait_until_silent()
-                    time.sleep(0.5)
-
-        speak("That is all for now, Sir.")
-
-    except Exception as e:
-        print(e)
-        speak("I encountered an error while accessing your inbox, Sir.")
-    finally:
-        if 'mail' in locals():
-            try:
-                mail.close()
-                mail.logout()
-            except:
-                pass
-
-# weather fetch function
-def getWeather(city):
-    """Fetches weather data for the specified city using OpenWeather API."""
-    try:
-        api_key = os.getenv("OPENWEATHER_KEY")
-        if not api_key:
-            return "Error: OpenWeather API key is missing from the environment variables."
-
-        url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
-        headers = {"User-Agent": "CypherVoiceAssistant/1.0"}
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 404:
-            return f"I'm sorry, I couldn't find any weather data for the city {city}."
-            
-        if response.status_code == 200:
-            data = response.json()
-            city_name = data['name']
-            temp = round(data['main']['temp'])
-            description = data['weather'][0]['description']
-            humidity = data['main']['humidity']
-            wind_speed = data['wind']['speed']
-            return f"Currently in {city_name}, it is {temp} degrees Celsius with {description}. The humidity is at {humidity} percent, with a wind speed of {wind_speed} meters per second."
+            self.send_email_smtp(email_address, mail_subject, mail_body)
         else:
-            return "There was an error communicating with the weather server."
-            
-    except requests.exceptions.RequestException as e:
-        return "I am currently unable to connect to the weather network. Please check your internet connection."
-    except Exception as e:
-        return "Sorry, I encountered an internal error while fetching the weather."
+            self.speak(f"I couldn't find an email for {name}")
 
+    def get_mail_body(self):
+        """Prompts the user for the body of the email, waits for the user to finish speaking, and then returns the transcribed text. Handles cases where the user does not provide any input."""
+        self.speak("What should I say in the email?")
+        self.wait_until_silent()
+        return self.listen()
 
-def getNews():
-    try:
-        api = NewsDataApiClient(apikey=os.getenv("NEWS_API_KEY"))
-        response = api.latest_api(country="in", language="en")
+    def get_mail_subject(self):
+        """Prompts the user for the subject of the email, waits for the user to finish speaking, and then returns the transcribed text. Handles cases where the user does not provide any input."""
+        self.speak("What is the subject of the email?")
+        self.wait_until_silent()
+        return self.listen()
 
-        if response.get("status") == "success":
-            articles = response.get("results", [])
-            news_brief = "Here are the top news headlines. "
-            for i in range(min(5, len(articles))):
-                news_brief += f"{i+1}. {articles[i]['title']}. "
-            print(news_brief)
-            return news_brief
-        else:
-            return "Sorry, I could not fetch the news at this moment."
-            
-    except Exception as e:
-        print(f"News API Error: {e}")
-        return "Unable to fetch news right now due to a network error."
-
-# whatsapp message function
-def get_whatsapp_number_from_db(name_spoken):
-    try:
-        conn = sqlite3.connect("contact.db")
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT phone_number FROM contacts WHERE LOWER(name) = ?",
-            (name_spoken.lower().strip(),)
-        )
-        result = cursor.fetchone()
-    except sqlite3.Error as e:
-        print(f"Database Error: {e}")
-        return None
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-    if result:
-        raw_number = result[0]
-        clean_number = "".join(filter(str.isdigit, raw_number))
-        if len(clean_number) == 10:
-            clean_number = "+91" + clean_number
-        if not clean_number.startswith("+"):
-            clean_number = "+" + clean_number
-
-        return clean_number
-
-    return None
-
-
-def sendWhatsAppMessage():
-    speak("Whom do you want to send message?")
-    wait_until_silent()
-    name = speakToText()
-
-    if not name:
-        speak("I didn't hear a name.")
-        return
-
-    phone_number = get_whatsapp_number_from_db(name)
-
-    if not phone_number:
-        speak(f"I couldn't find a phone number for {name}")
-        return
-
-    speak("What is the message?")
-    wait_until_silent()
-    message = speakToText()
-
-    if not message:
-        speak("I didn't hear a message.")
-        return
-
-    threading.Thread(target=send_whatsapp_message, args=(phone_number, message), daemon=True).start()
-
-
-def send_whatsapp_message(phone_number, message):
-    speak("Sending message...")
-    # Let PyWhatKit handle the wait and the safe tab closing automatically!
-    wb.sendwhatmsg_instantly(
-        phone_number, message, wait_time=15, tab_close=True, close_time=3
-    )
-    speak("Message sent successfully.")
-
-# wikipedia search function
-def search_wikipedia(topic):
-    if not topic:
-        return "I didn't catch the topic, sir."
-    try:
-        result = wikipedia.summary(topic, sentences=2)
-        return f"According to Wikipedia: {result}"
-    except wikipedia.exceptions.DisambiguationError:
-        return "There are too many different results for that topic. Please be more specific."
-    except wikipedia.exceptions.PageError:
-        return "I couldn't find any matching page on Wikipedia, sir."
-    except Exception as e:
-        print(f"Wikipedia Error: {e}")
-        return "Connection to Wikipedia failed, sir."  
-
-# check internet speed
-def check_internet_speed():
-    try:
-        speak("Checking internet speed, please wait...")
-        wait_until_silent()
-
-        st = speedtest.Speedtest()
-        st.get_best_server()
-        download_speed = st.download(threads=1) / 1_000_000
-        upload_speed = st.upload(threads=1) / 1_000_000
-        ping = st.results.ping
-
-        return f"Download {download_speed:.1f} Mbps, Upload {upload_speed:.1f} Mbps, Ping {ping:.0f} ms"
-    except Exception as e:
-        print(e)
-        return "Internet speed check failed, sir."
-
-def setAlarm(time_str):
-    global alarm_event
-    alarm_event.clear() # Reset the cancellation flag
-    
-    def alarm_worker():
+    def send_email_smtp(self, to_address, subject, body):
+        """Sends an email using the SMTP protocol with the provided recipient address, subject, and body. Handles authentication using environment variables for the email credentials and manages potential errors during the sending process, ensuring that the user is informed of the success or failure of the email delivery."""
+        from_address = os.getenv("EMAIL_USER")
+        password = os.getenv("EMAIL_PASS")
+        message = f"Subject: {subject}\n\n{body}"
+        server = None
         try:
-            now = datetime.now()
-            alarm_datetime = datetime.strptime(time_str, "%H:%M")
-            alarm_datetime = alarm_datetime.replace(
-                year=now.year, month=now.month, day=now.day
-            )
-
-            if alarm_datetime <= now:
-                alarm_datetime += timedelta(days=1)
-
-            sleep_seconds = (alarm_datetime - datetime.now()).total_seconds()
-
-            # Wait for sleep_seconds, OR until the user cancels it
-            was_cancelled = alarm_event.wait(timeout=sleep_seconds)
-
-            if not was_cancelled:
-                speak("Alarm ringing, Sir!")
-
+            server = smtplib.SMTP("smtp.gmail.com", 587)
+            server.starttls()
+            server.login(from_address, password)
+            server.sendmail(from_address, to_address, message)
+            self.speak("Email has been sent successfully.")
         except Exception as e:
-            print(f"Alarm Error: {e}")
-            
-    threading.Thread(target=alarm_worker, daemon=True).start()
-
-
-def activateAssistant():
-    global is_running
-    is_running = True
-    greet()
-
-    fs = 16000  
-    duration_wake = 1
-    duration_cmd = 5 
-
-    while is_running:
-        set_ui_state("listening")
-        print("Waiting for wake word...")
-        try:
-            while speech_thread and speech_thread.is_alive():
-                time.sleep(0.05)
-            
-            try:
-                recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
-                sd.wait()
-            except ValueError:
-                fs = 44100 
-                recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
-                sd.wait()
-            if not is_running:
-                return
-            audio_data = sr.AudioData(recording.tobytes(), fs, 2)
-
-            set_ui_state("processing")
-            word = recognizer.recognize_google(audio_data, language="en-IN").lower()
-            print("Heard:", word)
-
-            if "turn off" in word:
-                shutdown_sequence()
-                return
-            
-            wake_words = ["cypher", "cipher", "saifer", "hey cypher"]
-
-            if any(w in word for w in wake_words):
-                activate_msg = ["Yes, Sir?", "At your service.", "I'm here, Sir.", "Ready, Sir."]
-                speak(random.choice(activate_msg) if random.random() < 0.7 else "hmm..")
-                wait_until_silent()
-                
-                active = True
-                while active and is_running:
-                    try:
-                        print("CYPHER Active...")
-                        set_ui_state("listening")
-                        # ---> PLAY A TINY BEEP SO THE USER KNOWS TO SPEAK <---
-                        print("\a")
-                        
-                        try:
-                            cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
-                            sd.wait()
-                        except ValueError:
-                            fs = 44100
-                            cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
-                            sd.wait()
-                        if not is_running:
-                            return
-                        cmd_audio = sr.AudioData(cmd_recording.tobytes(), fs, 2)
-
-                        set_ui_state("processing")
-                        command = recognizer.recognize_google(cmd_audio, language="en-IN").lower()
-                        ui_print(f"USER: {command}")
-
-                        if "stop listening" in command or "go to sleep" in command:
-                            speak("Entering standby mode.")
-                            active = False
-                        elif "turn off" in command:
-                            shutdown_sequence()
-                            return
-                        else:
-                            processCommand(command)
-
-                    except sr.UnknownValueError:
-                        set_ui_state("idle")
-                    except Exception as e:
-                        print(f"Command Error: {e}")
-                        set_ui_state("idle")
-
-        except sr.UnknownValueError:
-            pass 
-        except Exception as e:
-            print(f"Wake Word Error: {e}")
+            print(e)
+            self.speak("Sorry, I was unable to send the email.")
         finally:
-            if is_running:
-                set_ui_state("idle")
+            if server: 
+                server.quit()
 
+    def check_emails(self):
+        """Checks for new emails in the user's inbox using the IMAP protocol, retrieves the subject and sender of the latest unread emails, and speaks this information to the user. Handles authentication using environment variables for the email credentials and manages potential errors during the email retrieval process, ensuring that the user is informed of any issues accessing their inbox."""
+        try:
+            self.speak("Checking for new emails, Sir...")
+            self.wait_until_silent()
+
+            mail = imaplib.IMAP4_SSL("imap.gmail.com")
+            mail.login(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASS"))
+            mail.select("inbox")
+
+            status, messages = mail.search(None, "UNSEEN")
+            email_ids = messages[0].split()
+
+            if not email_ids:
+                self.speak("You have no new emails, Sir.")
+                self.wait_until_silent()
+                return
+
+            count = len(email_ids)
+            self.speak(f"You have {count} new emails.")
+            self.wait_until_silent()
+            if count > 3:
+                self.speak("Reading the latest 3 emails. subject and sender only, Sir.")
+                self.wait_until_silent()
+
+            for i in range(min(3, count)):
+                latest_email_id = email_ids[-(i + 1)] 
+                _, msg_data = mail.fetch(latest_email_id, "(RFC822)")
+
+                for response_part in msg_data:
+                    if isinstance(response_part, tuple):
+                        msg = email.message_from_bytes(response_part[1])
+                        subject_parts = decode_header(msg["Subject"])
+                        subject = "".join([
+                            (part[0].decode(part[1] or "utf-8") if isinstance(part[0], bytes) else str(part[0]))
+                            for part in subject_parts
+                        ])
+
+                        from_header = msg.get("From")
+                        if from_header:
+                            from_parts = decode_header(from_header)
+                            from_ = "".join([
+                                (part[0].decode(part[1] or "utf-8") if isinstance(part[0], bytes) else str(part[0]))
+                                for part in from_parts
+                            ])
+                            if "<" in from_:
+                                from_ = from_.split("<")[0].strip().replace('"', "")
+                        else:
+                            from_ = "Unknown"
+
+                        self.speak(f"Email {i+1} from {from_}. Subject: {subject}")
+                        self.wait_until_silent()
+                        time.sleep(0.5)
+
+            self.speak("That is all for now, Sir.")
+
+        except Exception as e:
+            print(e)
+            self.speak("I encountered an error while accessing your inbox, Sir.")
+        finally:
+            if 'mail' in locals():
+                try:
+                    mail.close()
+                    mail.logout()
+                except: 
+                    pass
+
+    def get_weather(self, city):
+        """Fetches the current weather information for a specified city using the OpenWeather API. Handles potential errors such as missing API keys, city not found, and network issues gracefully, providing informative feedback to the user in each case."""
+        try:
+            api_key = os.getenv("OPENWEATHER_KEY")
+            if not api_key:
+                return "Error: OpenWeather API key is missing from the environment variables."
+
+            url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
+            headers = {"User-Agent": "CypherVoiceAssistant/1.0"}
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            
+            if response.status_code == 404:
+                return f"I'm sorry, I couldn't find any weather data for the city {city}."
+                
+            if response.status_code == 200:
+                data = response.json()
+                city_name = data['name']
+                temp = round(data['main']['temp'])
+                description = data['weather'][0]['description']
+                humidity = data['main']['humidity']
+                wind_speed = data['wind']['speed']
+                return f"Currently in {city_name}, it is {temp} degrees Celsius with {description}. The humidity is at {humidity} percent, with a wind speed of {wind_speed} meters per second."
+            else:
+                return "There was an error communicating with the weather server."
+                
+        except requests.exceptions.RequestException as e:
+            return "I am currently unable to connect to the weather network. Please check your internet connection."
+        except Exception as e:
+            return "Sorry, I encountered an internal error while fetching the weather."
+
+    def get_news(self):
+        """Fetches the latest news headlines using the NewsData API. Handles potential errors such as missing API keys, issues with the API response, and network problems gracefully, providing informative feedback to the user in each case."""
+        try:
+            api = NewsDataApiClient(apikey=os.getenv("NEWS_API_KEY"))
+            response = api.latest_api(country="in", language="en")
+
+            if response.get("status") == "success":
+                articles = response.get("results", [])
+                news_brief = "Here are the top news headlines. "
+                for i in range(min(5, len(articles))):
+                    news_brief += f"{i+1}. {articles[i]['title']}. "
+                print(news_brief)
+                return news_brief
+            else:
+                return "Sorry, I could not fetch the news at this moment."
+                
+        except Exception as e:
+            print(f"News API Error: {e}")
+            return "Unable to fetch news right now due to a network error."
+
+    def get_whatsapp_number_from_db(self, name_spoken):
+        """Retrieves a WhatsApp number from the database based on the spoken name. Cleans and formats the phone number to ensure it is in the correct format for sending messages. Handles database errors gracefully and informs the user if a database error occurs."""
+        try:
+            conn = sqlite3.connect("contact.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT phone_number FROM contacts WHERE LOWER(name) = ?", (name_spoken.lower().strip(),))
+            result = cursor.fetchone()
+        except sqlite3.Error as e:
+            print(f"Database Error: {e}")
+            return None
+        finally:
+            if 'conn' in locals(): 
+                conn.close()
+
+        if result:
+            raw_number = result[0]
+            clean_number = "".join(filter(str.isdigit, raw_number))
+            if len(clean_number) == 10:
+                clean_number = "+91" + clean_number
+            if not clean_number.startswith("+"):
+                clean_number = "+" + clean_number
+            return clean_number
+        return None
+
+    def prompt_whatsapp_message(self):
+        """Guides the user through sending a WhatsApp message by first asking for the recipient's name, retrieving the phone number from the database, and then prompting for the message content. Finally, it sends the message using the pywhatkit library and handles any errors that may occur during the process."""
+        self.speak("Whom do you want to send message?")
+        self.wait_until_silent()
+        name = self.listen()
+
+        if not name:
+            self.speak("I didn't hear a name.")
+            return
+
+        phone_number = self.get_whatsapp_number_from_db(name)
+
+        if not phone_number:
+            self.speak(f"I couldn't find a phone number for {name}")
+            return
+
+        self.speak("What is the message?")
+        self.wait_until_silent()
+        message = self.listen()
+
+        if not message:
+            self.speak("I didn't hear a message.")
+            return
+
+        threading.Thread(target=self.send_whatsapp_message, args=(phone_number, message), daemon=True).start()
+
+    def send_whatsapp_message(self, phone_number, message):
+        """Sends a WhatsApp message using the pywhatkit library. Handles potential errors during the sending process and informs the user of the success or failure of the message delivery."""
+        self.speak("Sending message...")
+        wb.sendwhatmsg_instantly(phone_number, message, wait_time=15, tab_close=True, close_time=3)
+        self.speak("Message sent successfully.")
+
+    def search_wikipedia(self, topic):
+        """Searches Wikipedia for a given topic and returns a brief summary. Handles potential errors such as disambiguation, page not found, and network issues gracefully, providing informative feedback to the user in each case."""
+        if not topic:
+            return "I didn't catch the topic, sir."
+        try:
+            result = wikipedia.summary(topic, sentences=2)
+            return f"According to Wikipedia: {result}"
+        except wikipedia.exceptions.DisambiguationError:
+            return "There are too many different results for that topic. Please be more specific."
+        except wikipedia.exceptions.PageError:
+            return "I couldn't find any matching page on Wikipedia, sir."
+        except Exception as e:
+            print(f"Wikipedia Error: {e}")
+            return "Connection to Wikipedia failed, sir."  
+
+    def check_internet_speed(self):
+        """Checks the current internet speed using the speedtest library and returns the download speed, upload speed, and ping. Handles potential errors during the speed test process gracefully and informs the user if the internet speed check fails."""
+        try:
+            self.speak("Checking internet speed, please wait...")
+            self.wait_until_silent()
+            st = speedtest.Speedtest()
+            st.get_best_server()
+            download_speed = st.download(threads=1) / 1_000_000
+            upload_speed = st.upload(threads=1) / 1_000_000
+            ping = st.results.ping
+            return f"Download {download_speed:.1f} Mbps, Upload {upload_speed:.1f} Mbps, Ping {ping:.0f} ms"
+        except Exception as e:
+            print(e)
+            return "Internet speed check failed, sir."
+
+    def set_alarm(self, time_str):
+        """Sets an alarm for a specified time in HH:MM format. The alarm will trigger a spoken notification when the time is reached. Handles potential errors in time parsing and ensures that the alarm can be cancelled if needed."""
+        self.alarm_event.clear()
+        def alarm_worker():
+            try:
+                now = datetime.now()
+                alarm_datetime = datetime.strptime(time_str, "%H:%M")
+                alarm_datetime = alarm_datetime.replace(year=now.year, month=now.month, day=now.day)
+
+                if alarm_datetime <= now:
+                    alarm_datetime += timedelta(days=1)
+
+                sleep_seconds = (alarm_datetime - datetime.now()).total_seconds()
+                was_cancelled = self.alarm_event.wait(timeout=sleep_seconds)
+
+                if not was_cancelled:
+                    self.speak("Alarm ringing, Sir!")
+            except Exception as e:
+                print(f"Alarm Error: {e}")
+                self.speak("Failed to set alarm, sir.")
+        threading.Thread(target=alarm_worker, daemon=True).start()
+
+    def process_command(self, c):
+        """Processes a user command by checking for various triggers and executing the corresponding actions. Handles a wide range of commands including opening websites, executing hotkeys, controlling media playback, managing applications, fetching information, and more. Provides feedback to the user for each action taken and ensures that the UI state is updated appropriately throughout the process."""
+        c_lower = c.lower()
+        self.ui_print(f"Processing: {c}")
+
+        # Check for web links first
+        for site, url in WEB_LINKS.items():
+            if site in c_lower:
+                self.speak(f"Opening {site}, Sir.")
+                self.wait_until_silent()
+                return webbrowser.open(url)
+
+        # Check for hotkeys next
+        for trigger, keys in HOTKEYS.items():
+            if trigger in c_lower:
+                self.speak(f"Executing {trigger}, Sir.")
+                self.wait_until_silent()
+                return pyautogui.hotkey(*keys)
+
+        # Check for media controls
+        for key, media_key in MEDIA_KEYS.items():
+            if key in c_lower:
+                self.speak("Right away, Sir.")
+                self.wait_until_silent()
+                return pyautogui.press(media_key)
+
+        # Check for application openings
+        if "open" in c_lower:
+            app_name = c_lower.replace("open", "").strip()
+            actual_app_name = APPS_NAMES.get(app_name, app_name)
+            self.speak(f"Opening {actual_app_name}, Sir.")
+            self.wait_until_silent()
+            self.open_app(actual_app_name)
+            
+        # Check for typing command
+        elif "type what i say" in c_lower:
+            self.speak("What do you want to type?")
+            self.wait_until_silent()
+            text = self.listen()
+            if text:
+                pyautogui.typewrite(text)
+                pyautogui.press("enter")
+                
+        # Check for sleep command
+        elif "put on sleep" in c_lower:
+            pyautogui.hotkey("win", 'x')
+            time.sleep(0.2)
+            pyautogui.press('u')
+            time.sleep(0.2)
+            pyautogui.press('s')
+            
+        # Check for shutdown command
+        elif "shutdown" in c_lower:
+            self.speak("Are you sure you want to shut down the computer, Sir? Say yes to confirm.")
+            self.wait_until_silent()
+            confirmation = self.listen()
+            if "yes" in confirmation:
+                self.speak("Shutting down.")
+                os.system("shutdown /s /t 1")
+            else:
+                self.speak("Shutdown cancelled.") 
+            
+        # Check for restart command
+        elif "restart" in c_lower:
+            self.speak("Are you sure you want to restart the system, Sir? Say yes to confirm.")
+            self.wait_until_silent()
+            confirmation = self.listen()
+            if "yes" in confirmation:
+                self.speak("Restarting.")
+                os.system("shutdown /r /t 1")
+            else:
+                self.speak("Restart cancelled.")
+            
+        # Check for weather command
+        elif "weather" in c_lower:
+            city = c_lower.split("in")[-1].strip() if "in" in c_lower else "Mumbai"
+            res = self.get_weather(city)
+            self.speak(res)
+            self.wait_until_silent()
+            
+        # Check for send email command
+        elif "send email" in c_lower:
+            self.send_mail()
+            
+        # Check for check email command
+        elif "check email" in c_lower or "read email" in c_lower:
+            self.check_emails()
+            
+        # Check for check internet speed command
+        elif "check internet speed" in c_lower:
+            self.speak(self.check_internet_speed())
+            self.wait_until_silent()
+            
+        # Check for news command
+        elif "news" in c_lower:
+            self.speak(self.get_news())
+            self.wait_until_silent()
+            
+        # Check for send WhatsApp message command
+        elif "send message on whatsapp" in c_lower:
+            self.prompt_whatsapp_message()
+        
+        # Check for add contact command
+        elif "add contact" in c_lower or "save contact" in c_lower or "new contact" in c_lower:
+            self.add_contact()
+            
+        # Check for Wikipedia search command
+        elif "wikipedia" in c_lower:
+            topic = re.sub(r"(search wikipedia for|wikipedia|who is|what is)", "", c_lower).strip()
+            if not topic:
+                self.speak("What is the topic?")
+                self.wait_until_silent()
+                topic = self.listen()
+                
+            if topic:
+                self.speak(f"Searching Wikipedia for {topic}, Sir.")
+                self.wait_until_silent()
+                self.speak(self.search_wikipedia(topic))
+                self.wait_until_silent()
+                
+        # Check for conversational words
+        elif any(phrase in c_lower for phrase in ["new session", "reset chat", "clear history"]):
+            self.reset_chat()
+
+        # Check for time, date, and day commands
+        elif "time" in c_lower:
+            self.speak(f"The current time is {datetime.now().strftime('%H:%M')}")
+            
+        elif "date" in c_lower:
+            self.speak(f"Today's date is {datetime.now().strftime('%B %d, %Y')}")
+            
+        elif "day" in c_lower:
+            self.speak(f"Today is {datetime.now().strftime('%A')}")
+
+        # Check for presence confirmation
+        elif "are you there" in c_lower:
+            self.speak("Yes sir, I am here.")
+            
+        # Check for stop commands
+        elif "turn off" in c_lower or "stop" in c_lower:
+            if "stop speaking" in c_lower or c_lower.strip() == "stop":
+                self.stop_speaking()
+            else:
+                self.shutdown_sequence()
+
+        # Check for alarm commands
+        elif "set alarm" in c_lower:
+            self.speak("At what time should I set the alarm, Sir? Please say it in HH:MM format.")
+            self.wait_until_silent()
+            alarm_time = self.listen()
+            alarm_time = alarm_time.replace(" ", "").replace(".", ":")
+            try:
+                datetime.strptime(alarm_time, "%H:%M")
+                self.speak(f"Setting alarm for {alarm_time}, Sir.")
+                self.set_alarm(alarm_time)
+            except ValueError:
+                self.speak("I received an invalid time format. Cancelling alarm.")
+                
+        # Check for cancel/stop alarm commands
+        elif "cancel alarm" in c_lower or "stop alarm" in c_lower:
+            self.alarm_event.set()
+            self.speak("The active alarm has been cancelled, Sir.")
+        
+        # If no specific command is recognized, check if the input is conversational or if it should be processed as a general query to the AI
+        else:
+            conversational_words = ["hello", "hi", "hey", "thanks", "yes", "no", "why", "who", "what", "wow"]
+            if len(c.split()) < 2 and c_lower not in conversational_words:
+                self.speak("Could you please be more specific, Sir?")
+                self.wait_until_silent()
+            else:
+                self.set_ui_state("processing")
+                self.speak_while_thinking(c)
+
+    def activate_assistant(self):
+        """Activates the assistant by entering a loop that listens for a wake word, processes commands when the wake word is detected, and manages the UI state accordingly. The assistant remains active until a shutdown command is given, at which point it executes a graceful shutdown sequence."""
+        self.is_running = True
+        self.greet()
+
+        fs = 16000  
+        duration_wake = 1
+        duration_cmd = 5 
+
+        while self.is_running:
+            self.set_ui_state("listening")
+            print("Waiting for wake word...")
+            try:
+                while self.speech_thread and self.speech_thread.is_alive():
+                    time.sleep(0.05)
+                
+                try:
+                    recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
+                    sd.wait()
+                except ValueError:
+                    fs = 44100 
+                    recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
+                    sd.wait()
+
+                if not self.is_running:
+                    return
+                audio_data = sr.AudioData(recording.tobytes(), fs, 2)
+
+                self.set_ui_state("processing")
+                word = self.recognizer.recognize_google(audio_data, language="en-IN").lower()
+                print("Heard:", word)
+
+                if "turn off" in word:
+                    self.shutdown_sequence()
+                    return
+                
+                wake_words = ["cypher", "cipher", "saifer", "hey cypher"]
+
+                if any(w in word for w in wake_words):
+                    activate_msg = ["Yes, Sir?", "At your service.", "I'm here, Sir.", "Ready, Sir."]
+                    self.speak(random.choice(activate_msg) if random.random() < 0.7 else "hmm..")
+                    self.wait_until_silent()
+                    
+                    active = True
+                    while active and self.is_running:
+                        try:
+                            print("CYPHER Active...")
+                            self.set_ui_state("listening")
+                            print("\a")
+                            
+                            try:
+                                cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
+                                sd.wait()
+                            except ValueError:
+                                fs = 44100
+                                cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
+                                sd.wait()
+
+                            if not self.is_running:
+                                return
+                            cmd_audio = sr.AudioData(cmd_recording.tobytes(), fs, 2)
+
+                            self.set_ui_state("processing")
+                            command = self.recognizer.recognize_google(cmd_audio, language="en-IN").lower()
+                            self.ui_print(f"USER: {command}")
+
+                            if "stop listening" in command or "go to sleep" in command:
+                                self.speak("Entering standby mode.")
+                                active = False
+                            elif "turn off" in command:
+                                self.shutdown_sequence()
+                                return
+                            else:
+                                self.process_command(command)
+
+                        except sr.UnknownValueError:
+                            self.set_ui_state("idle")
+                        except Exception as e:
+                            print(f"Command Error: {e}")
+                            self.set_ui_state("idle")
+
+            except sr.UnknownValueError:
+                pass 
+            except Exception as e:
+                print(f"Wake Word Error: {e}")
+            finally:
+                if self.is_running:
+                    self.set_ui_state("idle")
+
+# Main execution
 if __name__ == "__main__":
-    check_env_variable()
-    load_memory()
-    activateAssistant()
+    core = CypherCore()
+    core.check_env_variable()
+    core.load_memory()
+    core.activate_assistant()
