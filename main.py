@@ -8,26 +8,20 @@ import os
 import keyboard as k
 import pyautogui
 import time
-from PIL import Image, ImageTk, ImageSequence
 import threading
 import sounddevice as sd
-import numpy as np
-import scipy.io.wavfile as wav
 from dotenv import load_dotenv
 import sqlite3
 from newsdataapi import NewsDataApiClient
 import edge_tts
 import asyncio
 import pywhatkit as wb
-import urllib.parse
 from datetime import datetime, timedelta
 import random
-import shutil
 import io
 import imaplib
 import email
 from email.header import decode_header
-import sys
 import json
 import speedtest
 from groq import Groq
@@ -1027,7 +1021,7 @@ class CypherCore:
         self.greet()
 
         fs = 16000  
-        duration_wake = 1
+        duration_wake = 5
         duration_cmd = 5 
 
         while self.is_running:
@@ -1049,7 +1043,7 @@ class CypherCore:
                     return
                 audio_data = sr.AudioData(recording.tobytes(), fs, 2)
 
-                self.set_ui_state("processing")
+                # self.set_ui_state("processing")
                 word = self.recognizer.recognize_google(audio_data, language="en-IN").lower()
                 print("Heard:", word)
 
