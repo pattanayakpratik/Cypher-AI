@@ -120,7 +120,10 @@ class CypherCore:
         self.recognizer = sr.Recognizer()
         self.recognizer.energy_threshold = ERROR_THRESHOLD
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.pause_threshold = 0.8  
+        self.recognizer.pause_threshold = 0.8
+
+        # Wikimedia Setup
+        wikipedia.set_lang("en")
 
         # TTS Event Loop
         self.tts_loop = asyncio.new_event_loop()
@@ -601,6 +604,9 @@ class CypherCore:
         """Sends an email using the SMTP protocol with the provided recipient address, subject, and body. Handles authentication using environment variables for the email credentials and manages potential errors during the sending process, ensuring that the user is informed of the success or failure of the email delivery."""
         from_address = os.getenv("EMAIL_USER")
         password = os.getenv("EMAIL_PASS")
+        if not from_address or not password:
+            self.speak("Email credentials are not configured in the environment variables.")
+            return
         message = f"Subject: {subject}\n\n{body}"
         server = None
         try:
@@ -618,12 +624,19 @@ class CypherCore:
 
     def check_emails(self):
         """Checks for new emails in the user's inbox using the IMAP protocol, retrieves the subject and sender of the latest unread emails, and speaks this information to the user. Handles authentication using environment variables for the email credentials and manages potential errors during the email retrieval process, ensuring that the user is informed of any issues accessing their inbox."""
+        user = os.getenv("EMAIL_USER")
+        password = os.getenv("EMAIL_PASS")
+        
+        if not user or not password:
+            self.speak("Email credentials are not configured.")
+            return
+        
         try:
             self.speak("Checking for new emails, Sir...")
             self.wait_until_silent()
 
             mail = imaplib.IMAP4_SSL("imap.gmail.com")
-            mail.login(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASS"))
+            mail.login(user, password)
             mail.select("inbox")
 
             status, messages = mail.search(None, "UNSEEN")
@@ -787,8 +800,12 @@ class CypherCore:
     def send_whatsapp_message(self, phone_number, message):
         """Sends a WhatsApp message using the pywhatkit library. Handles potential errors during the sending process and informs the user of the success or failure of the message delivery."""
         self.speak("Sending message...")
-        wb.sendwhatmsg_instantly(phone_number, message, wait_time=15, tab_close=True, close_time=3)
-        self.speak("Message sent successfully.")
+        try:
+            wb.sendwhatmsg_instantly(phone_number, message, wait_time=15, tab_close=True, close_time=3)
+            self.speak("Message sent successfully.")
+        except Exception as e:
+            print(f"Whatsapp Error: {e}")
+            self.speak("Sorry, I was unable to send the WhatsApp message.")
 
     def search_wikipedia(self, topic):
         """Searches Wikipedia for a given topic and returns a brief summary. Handles potential errors such as disambiguation, page not found, and network issues gracefully, providing informative feedback to the user in each case."""
@@ -1021,8 +1038,8 @@ class CypherCore:
         self.greet()
 
         fs = 16000  
-        duration_wake = 5
-        duration_cmd = 5 
+        duration_wake = 2
+        duration_cmd = 4
 
         while self.is_running:
             self.set_ui_state("listening")
