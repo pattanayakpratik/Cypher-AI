@@ -27,6 +27,9 @@ import speedtest
 from groq import Groq
 import wikipedia
 import re
+from faster_whisper import WhisperModel
+import sounddevice as sd
+import numpy as np
 
 load_dotenv()
 
@@ -116,11 +119,9 @@ class CypherCore:
         self.speech_lock = threading.Lock()
         self.alarm_event = threading.Event()
 
-        # Audio Recognition Setup
-        self.recognizer = sr.Recognizer()
-        self.recognizer.energy_threshold = ERROR_THRESHOLD
-        self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.pause_threshold = 0.8
+        # --- NEW OFFLINE AUDIO SETUP ---
+        self.ui_print("Booting AI Audio Models (This takes a moment...)")
+        self.stt_model = WhisperModel("base.en", device="cpu", compute_type="int8")
 
         # Wikimedia Setup
         wikipedia.set_lang("en")
@@ -368,44 +369,27 @@ class CypherCore:
         if self.speech_thread and self.speech_thread.is_alive():
             self.speech_thread.join(timeout=10)
 
-    def listen(self, retries=3):
-        """Listens to the user's voice input, processes it with speech recognition, and returns the transcribed text. Handles retries and errors gracefully."""
-        for _ in range(retries):
-            self.set_ui_state("listening")
-            try:
-                fs = 16000  
-                duration = 5  
-                print("Listening...")
-                
-                try:
-                    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
-                    sd.wait()
-                except ValueError:
-                    fs = 44100 
-                    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
-                    sd.wait()
-                
-                self.set_ui_state("processing")
-                audio_data = sr.AudioData(recording.tobytes(), fs, 2)
-                
-                text = self.recognizer.recognize_google(audio_data, language="en-IN")
-                self.ui_print(f"USER: {text}")
-                
-                self.set_ui_state("idle")
-                return text
-                
-            except sr.UnknownValueError:
-                self.set_ui_state("idle")
-                self.speak("I didn't catch that, Sir.")
-                self.wait_until_silent()
-                continue
-            except Exception as e:
-                print(f"Mic Error: {e}")
-                self.set_ui_state("idle")
-                break
-                
-        self.set_ui_state("idle")
-        return ""
+    def listen(self, duration=5):
+        self.set_ui_state("listening")
+        fs = 16000
+        
+        try:
+            recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='float32')
+            sd.wait()
+            
+            self.set_ui_state("processing")
+            audio_data = np.squeeze(recording)
+            segments, info = self.stt_model.transcribe(audio_data, beam_size=5)
+            text = "".join([segment.text for segment in segments]).strip()
+            
+            self.ui_print(f"USER: {text}")
+            self.set_ui_state("idle")
+            return text
+            
+        except Exception as e:
+            print(f"Mic Error: {e}")
+            self.set_ui_state("idle")
+            return ""
 
     def save_memory(self):
         """Saves the current chat history to a JSON file, ensuring that the history does not exceed a certain length to manage memory effectively."""
@@ -915,7 +899,7 @@ class CypherCore:
             self.speak("Are you sure you want to shut down the computer, Sir? Say yes to confirm.")
             self.wait_until_silent()
             confirmation = self.listen()
-            if "yes" in confirmation:
+            if confirmation and "yes" in confirmation.lower():
                 self.speak("Shutting down.")
                 os.system("shutdown /s /t 1")
             else:
@@ -926,7 +910,7 @@ class CypherCore:
             self.speak("Are you sure you want to restart the system, Sir? Say yes to confirm.")
             self.wait_until_silent()
             confirmation = self.listen()
-            if "yes" in confirmation:
+            if confirmation and "yes" in confirmation.lower():
                 self.speak("Restarting.")
                 os.system("shutdown /r /t 1")
             else:
@@ -1031,96 +1015,50 @@ class CypherCore:
             else:
                 self.set_ui_state("processing")
                 self.speak_while_thinking(c)
-
-    def activate_assistant(self):
-        """Activates the assistant by entering a loop that listens for a wake word, processes commands when the wake word is detected, and manages the UI state accordingly. The assistant remains active until a shutdown command is given, at which point it executes a graceful shutdown sequence."""
+def activate_assistant(self):
         self.is_running = True
         self.greet()
+        self.ui_print("Sensors Online. Say 'Cypher' to activate.")
 
-        fs = 16000  
-        duration_wake = 2
-        duration_cmd = 4
-
+        fs = 16000
+        wake_duration = 1.5 # 1.5 seconds is the perfect length for a wake word
+        
         while self.is_running:
-            self.set_ui_state("listening")
-            print("Waiting for wake word...")
+            self.set_ui_state("idle")
             try:
-                while self.speech_thread and self.speech_thread.is_alive():
-                    time.sleep(0.05)
+                # 1. Listen for 1.5 seconds
+                recording = sd.rec(int(wake_duration * fs), samplerate=fs, channels=1, dtype='float32')
+                sd.wait()
+                audio_data = np.squeeze(recording)
                 
-                try:
-                    recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
-                    sd.wait()
-                except ValueError:
-                    fs = 44100 
-                    recording = sd.rec(int(duration_wake * fs), samplerate=fs, channels=1, dtype='int16')
-                    sd.wait()
-
-                if not self.is_running:
-                    return
-                audio_data = sr.AudioData(recording.tobytes(), fs, 2)
-
-                # self.set_ui_state("processing")
-                word = self.recognizer.recognize_google(audio_data, language="en-IN").lower()
-                print("Heard:", word)
-
-                if "turn off" in word:
-                    self.shutdown_sequence()
-                    return
+                # 2. Transcribe it instantly (beam_size=1 makes it lightning fast)
+                segments, info = self.stt_model.transcribe(audio_data, beam_size=1)
+                text = "".join([segment.text for segment in segments]).lower().strip()
                 
-                wake_words = ["cypher", "cipher", "saifer", "hey cypher"]
-
-                if any(w in word for w in wake_words):
+                # 3. Check if your name was spoken!
+                # (Including common phonetic spellings Whisper might guess)
+                if "cypher" in text or "cipher" in text or "saifer" in text:
+                    self.set_ui_state("listening")
+                    
                     activate_msg = ["Yes, Sir?", "At your service.", "I'm here, Sir.", "Ready, Sir."]
-                    self.speak(random.choice(activate_msg) if random.random() < 0.7 else "hmm..")
+                    self.speak(random.choice(activate_msg))
                     self.wait_until_silent()
                     
-                    active = True
-                    while active and self.is_running:
-                        try:
-                            print("CYPHER Active...")
-                            self.set_ui_state("listening")
-                            print("\a")
+                    # 4. Now listen for the actual command
+                    command = self.listen(duration=5)
+                    
+                    if command:
+                        if "stop listening" in command.lower() or "go to sleep" in command.lower():
+                            self.speak("Entering standby mode.")
+                        elif "turn off" in command.lower():
+                            self.shutdown_sequence()
+                            break
+                        else:
+                            self.process_command(command)
                             
-                            try:
-                                cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
-                                sd.wait()
-                            except ValueError:
-                                fs = 44100
-                                cmd_recording = sd.rec(int(duration_cmd * fs), samplerate=fs, channels=1, dtype='int16')
-                                sd.wait()
-
-                            if not self.is_running:
-                                return
-                            cmd_audio = sr.AudioData(cmd_recording.tobytes(), fs, 2)
-
-                            self.set_ui_state("processing")
-                            command = self.recognizer.recognize_google(cmd_audio, language="en-IN").lower()
-                            self.ui_print(f"USER: {command}")
-
-                            if "stop listening" in command or "go to sleep" in command:
-                                self.speak("Entering standby mode.")
-                                active = False
-                            elif "turn off" in command:
-                                self.shutdown_sequence()
-                                return
-                            else:
-                                self.process_command(command)
-
-                        except sr.UnknownValueError:
-                            self.set_ui_state("idle")
-                        except Exception as e:
-                            print(f"Command Error: {e}")
-                            self.set_ui_state("idle")
-
-            except sr.UnknownValueError:
-                pass 
             except Exception as e:
-                print(f"Wake Word Error: {e}")
-            finally:
-                if self.is_running:
-                    self.set_ui_state("idle")
-
+                # Silently ignore empty audio chunks or mic stutters
+                time.sleep(0.1)
 # Main execution
 if __name__ == "__main__":
     core = CypherCore()
