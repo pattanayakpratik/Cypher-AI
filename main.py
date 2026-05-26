@@ -15,7 +15,6 @@ import sqlite3
 from newsdataapi import NewsDataApiClient
 import edge_tts
 import asyncio
-import pywhatkit as wb
 from datetime import datetime, timedelta
 import random
 import io
@@ -782,14 +781,15 @@ class CypherCore:
         threading.Thread(target=self.send_whatsapp_message, args=(phone_number, message), daemon=True).start()
 
     def send_whatsapp_message(self, phone_number, message):
-        """Sends a WhatsApp message using the pywhatkit library. Handles potential errors during the sending process and informs the user of the success or failure of the message delivery."""
         self.speak("Sending message...")
         try:
+            # We import it here so it doesn't crash the app on startup!
+            import pywhatkit as wb 
             wb.sendwhatmsg_instantly(phone_number, message, wait_time=15, tab_close=True, close_time=3)
             self.speak("Message sent successfully.")
         except Exception as e:
-            print(f"Whatsapp Error: {e}")
-            self.speak("Sorry, I was unable to send the WhatsApp message.")
+            print(f"WhatsApp/Internet Error: {e}")
+            self.speak("Sorry, I am unable to connect to WhatsApp at the moment. Please check the internet connection.")
 
     def search_wikipedia(self, topic):
         """Searches Wikipedia for a given topic and returns a brief summary. Handles potential errors such as disambiguation, page not found, and network issues gracefully, providing informative feedback to the user in each case."""
