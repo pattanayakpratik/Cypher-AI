@@ -5,7 +5,6 @@ import requests
 import pygame
 from google import genai
 import os
-import keyboard as k
 import pyautogui
 import time
 import threading
@@ -119,8 +118,8 @@ class CypherCore:
         self.alarm_event = threading.Event()
 
         # --- NEW OFFLINE AUDIO SETUP ---
-        self.ui_print("Booting AI Audio Models (This takes a moment...)")
-        self.stt_model = WhisperModel("base.en", device="cpu", compute_type="int8")
+        # We start this empty so the GUI opens instantly!
+        self.stt_model = None
 
         # Wikimedia Setup
         wikipedia.set_lang("en")
@@ -129,8 +128,7 @@ class CypherCore:
         self.tts_loop = asyncio.new_event_loop()
         threading.Thread(target=self._start_tts_loop, daemon=True).start()
 
-        # Hotkeys
-        k.add_hotkey("esc", self.stop_speaking)
+        
 
         # Pygame Mixer Setup
         try:
@@ -493,7 +491,7 @@ class CypherCore:
             time.sleep(0.15) 
             pyautogui.write(app, interval=0.01) 
             time.sleep(0.15) 
-            k.press_and_release("enter")
+            pyautogui.press("enter")
         except Exception as e:
             print(e)
             self.speak("Unable to open application.")
@@ -1015,13 +1013,20 @@ class CypherCore:
             else:
                 self.set_ui_state("processing")
                 self.speak_while_thinking(c)
-def activate_assistant(self):
+    def activate_assistant(self):
         self.is_running = True
         self.greet()
+        
+        # Load the AI safely in the background
+        if self.stt_model is None:
+            self.ui_print("Booting AI Audio Models (Please wait...)")
+            # Changed to compute_type="default" to prevent the silent CPU crash!
+            self.stt_model = WhisperModel("base.en", device="cpu", compute_type="default")
+            
         self.ui_print("Sensors Online. Say 'Cypher' to activate.")
 
-        fs = 16000
-        wake_duration = 1.5 # 1.5 seconds is the perfect length for a wake word
+        fs = 44100
+        wake_duration = 1.5 
         
         while self.is_running:
             self.set_ui_state("idle")
@@ -1031,12 +1036,11 @@ def activate_assistant(self):
                 sd.wait()
                 audio_data = np.squeeze(recording)
                 
-                # 2. Transcribe it instantly (beam_size=1 makes it lightning fast)
+                # 2. Transcribe it instantly
                 segments, info = self.stt_model.transcribe(audio_data, beam_size=1)
                 text = "".join([segment.text for segment in segments]).lower().strip()
                 
-                # 3. Check if your name was spoken!
-                # (Including common phonetic spellings Whisper might guess)
+                # 3. Check for the wake word
                 if "cypher" in text or "cipher" in text or "saifer" in text:
                     self.set_ui_state("listening")
                     
@@ -1057,7 +1061,6 @@ def activate_assistant(self):
                             self.process_command(command)
                             
             except Exception as e:
-                # Silently ignore empty audio chunks or mic stutters
                 time.sleep(0.1)
 # Main execution
 if __name__ == "__main__":
