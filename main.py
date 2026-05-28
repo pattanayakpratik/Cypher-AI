@@ -1,3 +1,7 @@
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["OMP_NUM_THREADS"] = "1"
+
 import smtplib
 import speech_recognition as sr
 import webbrowser
@@ -368,23 +372,44 @@ class CypherCore:
 
     def listen(self, duration=5):
         self.set_ui_state("listening")
-        fs = 16000
-        
+
+        if self.stt_model is None:
+            self.ui_print("STT model not loaded yet.")
+            self.set_ui_state("idle")
+            return ""
+
         try:
-            recording = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='float32')
+            fs = int(sd.query_devices(kind='input')['default_samplerate'])
+        except Exception:
+            fs = 16000
+
+        try:
+            recording = sd.rec(
+                int(duration * fs),
+                samplerate=fs,
+                channels=1,
+                dtype='float32'
+            )
             sd.wait()
-            
+
             self.set_ui_state("processing")
+
             audio_data = np.squeeze(recording)
-            segments, info = self.stt_model.transcribe(audio_data, beam_size=5)
+
+            segments, info = self.stt_model.transcribe(
+                audio_data,
+                beam_size=1
+            )
+
             text = "".join([segment.text for segment in segments]).strip()
-            
+
             self.ui_print(f"USER: {text}")
+
             self.set_ui_state("idle")
             return text
-            
+
         except Exception as e:
-            print(f"Mic Error: {e}")
+            print(f"Mic/STT Error: {e}")
             self.set_ui_state("idle")
             return ""
 
@@ -1013,6 +1038,7 @@ class CypherCore:
             else:
                 self.set_ui_state("processing")
                 self.speak_while_thinking(c)
+
     def activate_assistant(self):
         self.is_running = True
         self.greet()
@@ -1020,12 +1046,24 @@ class CypherCore:
         # Load the AI safely in the background
         if self.stt_model is None:
             self.ui_print("Booting AI Audio Models (Please wait...)")
-            # Changed to compute_type="default" to prevent the silent CPU crash!
-            self.stt_model = WhisperModel("base.en", device="cpu", compute_type="default")
+            
+            # ---> ADD CPU_THREADS AND NUM_WORKERS HERE <---
+            self.stt_model = WhisperModel(
+                "base.en", 
+                device="cpu", 
+                compute_type="default", 
+                cpu_threads=1, 
+                num_workers=1
+            )
             
         self.ui_print("Sensors Online. Say 'Cypher' to activate.")
-
-        fs = 44100
+        
+        # ---> DYNAMIC SAMPLE RATE (Prevents sounddevice from crashing) <---
+        try:
+            fs = int(sd.query_devices(kind='input')['default_samplerate'])
+        except Exception:
+            fs = 16000
+            
         wake_duration = 1.5 
         
         while self.is_running:
@@ -1062,6 +1100,7 @@ class CypherCore:
                             
             except Exception as e:
                 time.sleep(0.1)
+
 # Main execution
 if __name__ == "__main__":
     core = CypherCore()
