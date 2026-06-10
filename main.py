@@ -29,9 +29,7 @@ import speedtest
 from groq import Groq
 import wikipedia
 import re
-from faster_whisper import WhisperModel
-import sounddevice as sd
-import numpy as np
+
 
 load_dotenv()
 
@@ -121,9 +119,11 @@ class CypherCore:
         self.speech_lock = threading.Lock()
         self.alarm_event = threading.Event()
 
-        # --- NEW OFFLINE AUDIO SETUP ---
-        # We start this empty so the GUI opens instantly!
-        self.stt_model = None
+        # Original Stable Audio Recognition
+        self.recognizer = sr.Recognizer()
+        self.recognizer.energy_threshold = ERROR_THRESHOLD
+        self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.pause_threshold = 0.8
 
         # Wikimedia Setup
         wikipedia.set_lang("en")
@@ -372,44 +372,27 @@ class CypherCore:
 
     def listen(self, duration=5):
         self.set_ui_state("listening")
-
-        if self.stt_model is None:
-            self.ui_print("STT model not loaded yet.")
-            self.set_ui_state("idle")
-            return ""
-
         try:
-            fs = int(sd.query_devices(kind='input')['default_samplerate'])
-        except Exception:
-            fs = 16000
-
-        try:
-            recording = sd.rec(
-                int(duration * fs),
-                samplerate=fs,
-                channels=1,
-                dtype='float32'
-            )
-            sd.wait()
-
+            with sr.Microphone() as source:
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                # Listen for the actual command
+                audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=8)
+            
             self.set_ui_state("processing")
-
-            audio_data = np.squeeze(recording)
-
-            segments, info = self.stt_model.transcribe(
-                audio_data,
-                beam_size=1
-            )
-
-            text = "".join([segment.text for segment in segments]).strip()
-
+            text = self.recognizer.recognize_google(audio, language="en-IN")
+            
             self.ui_print(f"USER: {text}")
-
             self.set_ui_state("idle")
             return text
-
+            
+        except sr.WaitTimeoutError:
+            self.set_ui_state("idle")
+            return ""
+        except sr.UnknownValueError:
+            self.set_ui_state("idle")
+            return ""
         except Exception as e:
-            print(f"Mic/STT Error: {e}")
+            print(f"Mic Error: {e}")
             self.set_ui_state("idle")
             return ""
 
@@ -1042,43 +1025,19 @@ class CypherCore:
     def activate_assistant(self):
         self.is_running = True
         self.greet()
-        
-        # Load the AI safely in the background
-        if self.stt_model is None:
-            self.ui_print("Booting AI Audio Models (Please wait...)")
-            
-            # ---> ADD CPU_THREADS AND NUM_WORKERS HERE <---
-            self.stt_model = WhisperModel(
-                "base.en", 
-                device="cpu", 
-                compute_type="default", 
-                cpu_threads=1, 
-                num_workers=1
-            )
-            
         self.ui_print("Sensors Online. Say 'Cypher' to activate.")
-        
-        # ---> DYNAMIC SAMPLE RATE (Prevents sounddevice from crashing) <---
-        try:
-            fs = int(sd.query_devices(kind='input')['default_samplerate'])
-        except Exception:
-            fs = 16000
-            
-        wake_duration = 1.5 
         
         while self.is_running:
             self.set_ui_state("idle")
             try:
-                # 1. Listen for 1.5 seconds
-                recording = sd.rec(int(wake_duration * fs), samplerate=fs, channels=1, dtype='float32')
-                sd.wait()
-                audio_data = np.squeeze(recording)
+                with sr.Microphone() as source:
+                    # Listen for short 3-second chunks for the wake word
+                    self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                    audio = self.recognizer.listen(source, timeout=1, phrase_time_limit=3)
                 
-                # 2. Transcribe it instantly
-                segments, info = self.stt_model.transcribe(audio_data, beam_size=1)
-                text = "".join([segment.text for segment in segments]).lower().strip()
+                # Transcribe using lightweight API
+                text = self.recognizer.recognize_google(audio, language="en-IN").lower()
                 
-                # 3. Check for the wake word
                 if "cypher" in text or "cipher" in text or "saifer" in text:
                     self.set_ui_state("listening")
                     
@@ -1086,8 +1045,7 @@ class CypherCore:
                     self.speak(random.choice(activate_msg))
                     self.wait_until_silent()
                     
-                    # 4. Now listen for the actual command
-                    command = self.listen(duration=5)
+                    command = self.listen()
                     
                     if command:
                         if "stop listening" in command.lower() or "go to sleep" in command.lower():
@@ -1098,6 +1056,10 @@ class CypherCore:
                         else:
                             self.process_command(command)
                             
+            except sr.WaitTimeoutError:
+                pass
+            except sr.UnknownValueError:
+                pass
             except Exception as e:
                 time.sleep(0.1)
 
