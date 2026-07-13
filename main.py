@@ -8,7 +8,6 @@ import webbrowser
 import requests
 import pygame
 from google import genai
-import os
 import pyautogui
 import time
 import threading
@@ -371,11 +370,11 @@ class CypherCore:
             self.speech_thread.join(timeout=10)
 
     def listen(self, duration=5):
+        """Listens to the user's voice input using native PyAudio buffering."""
         self.set_ui_state("listening")
         try:
             with sr.Microphone() as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                # Listen for the actual command
+                # Quick calibration, then listen
                 audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=8)
             
             self.set_ui_state("processing")
@@ -386,9 +385,11 @@ class CypherCore:
             return text
             
         except sr.WaitTimeoutError:
+            print("[Debug] WaitTimeoutError: No speech detected within the timeout period.")
             self.set_ui_state("idle")
             return ""
         except sr.UnknownValueError:
+            print("[Debug] UnknownValueError: Speech was unintelligible.")
             self.set_ui_state("idle")
             return ""
         except Exception as e:
@@ -1023,44 +1024,66 @@ class CypherCore:
                 self.speak_while_thinking(c)
 
     def activate_assistant(self):
+        """Activates the assistant using a flawless continuous listening loop."""
         self.is_running = True
         self.greet()
+        self.wait_until_silent()
         self.ui_print("Sensors Online. Say 'Cypher' to activate.")
-        
+        mic = sr.Microphone()
+        with mic as source:
+            self.recognizer.adjust_for_ambient_noise(source, duration=1)
+
         while self.is_running:
             self.set_ui_state("idle")
             try:
-                with sr.Microphone() as source:
-                    # Listen for short 3-second chunks for the wake word
-                    self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                    audio = self.recognizer.listen(source, timeout=1, phrase_time_limit=3)
+                with mic as source:
+                    print("Listening for wake word...")
+                    audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=5)
+
+                # Send to Google
+                word = self.recognizer.recognize_google(audio, language="en-IN").lower()
                 
-                # Transcribe using lightweight API
-                text = self.recognizer.recognize_google(audio, language="en-IN").lower()
+                # [DEBUG] Prints everything Google hears to your terminal
+                print(f"[DEBUG] Google heard: {word}")
+
+                if "turn off" in word:
+                    self.shutdown_sequence()
+                    return
                 
-                if "cypher" in text or "cipher" in text or "saifer" in text:
+                # Added all the common ways Google misspells "Cypher"
+                wake_words = ["cypher", "cipher", "saifer"]
+
+                if any(w in word for w in wake_words):
                     self.set_ui_state("listening")
                     
                     activate_msg = ["Yes, Sir?", "At your service.", "I'm here, Sir.", "Ready, Sir."]
                     self.speak(random.choice(activate_msg))
                     self.wait_until_silent()
                     
-                    command = self.listen()
-                    
-                    if command:
+                    active = True
+                    while active and self.is_running:
+                        print("CYPHER Active... waiting for command")
+                        command = self.listen()
+
+                        # If user didn't say anything, continue listening for commands
+                        if not command:
+                            continue
+
                         if "stop listening" in command.lower() or "go to sleep" in command.lower():
                             self.speak("Entering standby mode.")
+                            active = False
                         elif "turn off" in command.lower():
                             self.shutdown_sequence()
-                            break
+                            return
                         else:
                             self.process_command(command)
-                            
+
             except sr.WaitTimeoutError:
-                pass
+                print("Waiting...")
             except sr.UnknownValueError:
-                pass
+                print("Could not understand audio.")
             except Exception as e:
+                print(f"Wake Word Recognition Error: {e}")
                 time.sleep(0.1)
 
 # Main execution
