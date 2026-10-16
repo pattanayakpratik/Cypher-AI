@@ -31,3 +31,9 @@ Thumbs.db
 
 # chat memory 
 chat_memory.json
+
+# --- PyInstaller & Distribution ---
+build/
+dist/
+*.spec
+*.zip
