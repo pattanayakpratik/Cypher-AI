@@ -37,3 +37,4 @@ build/
 dist/
 *.spec
 *.zip
+*.exe
