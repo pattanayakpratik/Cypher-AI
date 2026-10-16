@@ -6,8 +6,8 @@
 ![PyQt5](https://img.shields.io/badge/GUI-PyQt5-41CD52?style=for-the-badge&logo=qt&logoColor=white)
 ![Google Gemini](https://img.shields.io/badge/AI-Gemini%201.5%20Flash-8E75B2?style=for-the-badge&logo=google-gemini&logoColor=white)
 ![Edge-TTS](https://img.shields.io/badge/Speech-Neural%20Edge--TTS-0078D7?style=for-the-badge&logo=microsoft&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
-![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white)
+![Release](https://img.shields.io/github/v/release/pattanayakpratik/Cypher-AI?style=for-the-badge&logo=github&color=00ffcc)
+![Download](https://img.shields.io/badge/Download-Standalone%20EXE-brightgreen?style=for-the-badge&logo=windows)
 
 <br/>
 
@@ -15,7 +15,7 @@
 
 <br/>
 
-[Key Features](#-key-features) • [HUD Showcase](#-hud-visual-gallery) • [Architecture](#-system-architecture) • [Installation](#-installation--quick-start) • [Voice Commands](#-command-matrix) • [Author](#-author--connect)
+[⬇️ **Download Standalone EXE**](https://github.com/pattanayakpratik/Cypher-AI/releases/download/v3.0.0/Cypher-AI.exe) • [Key Features](#-key-features) • [HUD Showcase](#-hud-visual-gallery) • [Installation](#-installation--quick-start) • [Voice Commands](#-command-matrix) • [Author](#-author--connect)
 
 </div>
 
@@ -121,14 +121,26 @@ flowchart TD
 
 ## 🚀 Installation & Quick Start
 
-### 1. Clone the Repository
+### ⚡ Option 1: One-Click Executable (Recommended)
+
+No Python, terminal, or virtual environments required!
+
+1. Download **[`Cypher-AI.exe`](https://github.com/pattanayakpratik/Cypher-AI/releases/download/v3.0.0/Cypher-AI.exe)** from the [Latest Release](https://github.com/pattanayakpratik/Cypher-AI/releases/tag/v3.0.0).
+2. Double-click **`Cypher-AI.exe`** to launch the holographic HUD.
+3. On first run, the **Credentials Vault** will prompt you to enter your free Google Gemini API key. Click **"SAVE & APPLY PROTOCOLS"** and Cypher is online!
+
+---
+
+### 🛠️ Option 2: Run from Source (Developers)
+
+#### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/pattanayakpratik/Cypher-AI.git
 cd Cypher-AI
 ```
 
-### 2. Create and Activate Virtual Environment
+#### 2. Create and Activate Virtual Environment
 
 ```bash
 # Windows
@@ -136,7 +148,7 @@ python -m venv .venv
 .\.venv\Scripts\activate
 ```
 
-### 3. Install Dependencies
+#### 3. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
@@ -145,7 +157,7 @@ pip install -r requirements.txt
 > [!NOTE]
 > If you encounter audio driver issues with `PyAudio` on Windows, install the precompiled `.whl` wheel for your Python version or run `pip install pipwin && pipwin install pyaudio`.
 
-### 4. Configure Environment Variables
+#### 4. Configure Environment Variables
 
 Create a `.env` file in the root directory:
 
@@ -162,7 +174,7 @@ EMAIL_USER=your_email@gmail.com
 EMAIL_PASS=your_google_app_password
 ```
 
-### 5. Launch Cypher
+#### 5. Launch Cypher
 
 Start the holographic interface (which automatically initializes the voice engine):
 
