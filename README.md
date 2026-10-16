@@ -1,130 +1,207 @@
-# 🧠 Cypher Voice Assistant 
+# 🧠 Cypher AI — Holographic F.R.I.D.A.Y. Desktop HUD & Autonomous Assistant
 
-**Cypher** is a futuristic, voice-activated AI assistant designed to automate tasks, control your PC, and provide intelligent responses using Google's Gemini AI. It features a sci-fi GUI inspired by Iron Man's F.R.I.D.A.Y., complete with a rotating core and hacker-style terminal.
+<div align="center">
 
-## ⚡ Topics & Features
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white)
+![PyQt5](https://img.shields.io/badge/GUI-PyQt5-41CD52?style=for-the-badge&logo=qt&logoColor=white)
+![Google Gemini](https://img.shields.io/badge/AI-Gemini%201.5%20Flash-8E75B2?style=for-the-badge&logo=google-gemini&logoColor=white)
+![Edge-TTS](https://img.shields.io/badge/Speech-Neural%20Edge--TTS-0078D7?style=for-the-badge&logo=microsoft&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
+![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white)
 
-Cypher is equipped with a wide range of modules to handle daily tasks:
+<br/>
 
-### 🤖 **Core AI**
+**A next-generation desktop AI assistant inspired by Tony Stark's F.R.I.D.A.Y., featuring a sci-fi HUD with an animated multi-ring Arc Reactor, real-time 32-band audio spectrum equalizer, segmented LED telemetry gauges, and Google Gemini 1.5 Flash intelligence.**
 
-* **Generative Intelligence:** Powered by **Google Gemini 1.5 Flash** for fast, witty, and context-aware conversations.
-* **Voice Interaction:** Uses `SpeechRecognition` for listening and `Edge-TTS` for a high-quality, neural Indian-English voice (F.R.I.D.A.Y. style).
-* **Wake Word Detection:** Activates specifically on the keyword **"Cypher"**.
+<br/>
 
-### 🖥️ **Graphical Interface (GUI)**
+[Key Features](#-key-features) • [HUD Showcase](#-hud-visual-gallery) • [Architecture](#-system-architecture) • [Installation](#-installation--quick-start) • [Voice Commands](#-command-matrix) • [Author](#-author--connect)
 
-* **Futuristic Design:** Built with **PyQt5**, featuring a transparent window and "Glassmorphism" aesthetic.
-* **Live Animations:** A rotating reactor core that changes color based on status (Idle, Listening, Processing).
-* **System Diagnostics:** Real-time HUD displaying CPU usage, RAM, Battery, and Network speeds.
-* **Terminal Log:** A "hacker-style" typing log that displays internal processes and conversation history.
-
-### 🛠️ **System Automation**
-
-* **App Control:** Open any application (Chrome, VS Code, Notepad, Calculator, etc.).
-* **Window Management:** Switch tabs, close windows, minimize/maximize.
-* **Hardware Control:** Adjust Volume, Brightness, and Lock/Shutdown/Restart the PC.
-* **Typing Mode:** Dictate text directly into any text field ("Type what I say").
-
-### 🌐 **Online Connectivity**
-
-* **Information Retrieval:** Fetches real-time **Weather** and **News** headlines.
-* **Knowledge Base:** Searches **Wikipedia** for instant summaries of any topic.
-* **Web Navigation:** Opens websites like Google, YouTube, LinkedIn, GitHub, etc.
-
-### 📨 **Communication**
-
-* **Email:** Sends emails using SMTP and reads unread emails from your Inbox (IMAP).
-* **WhatsApp:** Sends automated WhatsApp messages to contacts in your database.
+</div>
 
 ---
 
-## 📂 Project Structure
+## 📸 HUD Visual Gallery
+
+Cypher features an interactive, reactive sci-fi interface built on PyQt5 that dynamically responds to 4 distinct operational states:
+
+| **STANDBY (IDLE)** | **LISTENING** |
+| :---: | :---: |
+| ![Standby State](screenshots/cypher_gui_idle.png) | ![Listening State](screenshots/cypher_gui_listening.png) |
+| *Concentric Arc Reactor with 48-tick radar compass, counter-rotating orbital satellite beads, and targeting reticles.* | *Matrix-green frequency glow with expanding sonar ripple wave pulses radiating from the core.* |
+| **PROCESSING** | **VOCALIZING** |
+| ![Processing State](screenshots/cypher_gui_processing.png) | ![Speaking State](screenshots/cypher_gui_speaking.png) |
+| *Electric-blue vortex hyperspeed rotation with accelerated energy arcs while Gemini synthesizes responses.* | *Harmonic vocal pulse, neon-magenta HUD shift, and active 32-band audio spectrum equalizer.* |
+
+---
+
+## ⚡ Key Features
+
+### 🖥️ Holographic Sci-Fi HUD (PyQt5)
+* **Multi-Ring Arc Reactor (`RotatingCore`):** Custom vector-rendered reactor with 48 radar tick marks, 3-segmented outer energy blades, an orbital ring with orbiting satellite beads, and central targeting crosshairs.
+* **Contextual State Engine:** Transitions smoothly between `idle` (cyan/blue), `listening` (matrix-green with sonar waves), `processing` (electric-blue vortex), and `speaking` (neon-magenta with vocal pulses).
+* **32-Band Audio Spectrum Equalizer (`VoiceVisualizer`):** Real-time audio frequency visualizer with harmonic sine dynamics and floating white peak caps that realistically decay.
+* **12-Segment LED Telemetry Gauges (`SegmentedGauge`):** Hardware diagnostics for **CPU Load**, **Memory Allocation**, **Battery Status**, and **Disk Storage** with dynamic color warning shifts (Cyan ➔ Amber ➔ Red).
+* **Cyberpunk Corner Reticles & Terminal:** Framed by HUD corner tech brackets `[ ┏ ┓ ┗ ┛ ]`, a real-time status pill, and a hacker-style terminal log with typewriter animation.
+
+### 🤖 Generative AI & Conversational Memory
+* **Google Gemini 1.5 Flash:** High-speed conversational reasoning, code assistance, and witty personality.
+* **Persistent Context:** Preserves dialogue history across wake cycles via local memory buffers (`chat_memory.json`).
+* **Hands-Free Wake Word:** Listens continuously for **"Cypher"** before engaging active speech recognition.
+
+### 🎙️ Neural Voice Interaction
+* **Natural Neural Speech:** Powered by Microsoft `Edge-TTS` (Indian-English female neural voice) for expressive, human-like voice synthesis.
+* **Low-Latency Streaming:** Plays synthesized speech directly via Pygame audio streams while keeping the GUI responsive.
+
+### 🛠️ Autonomous System Automation
+* **App Orchestration:** Launch apps (Chrome, VS Code, Notepad, Spotify, Calculator, Terminal, etc.) via voice.
+* **Window & Tab Management:** Switch between active windows, switch browser tabs, close apps, or minimize to desktop.
+* **Hardware Controls:** Adjust volume levels, screen brightness, and trigger system Sleep, Lock, Restart, or Shutdown sequences.
+* **Voice Dictation Mode:** Dictates speech directly into any focused input field ("Type what I say...").
+
+### 🌐 Live Web Intelligence & Communications
+* **Real-Time Data:** Live weather reports (OpenWeatherMap API), world news headlines (NewsData API), and instant Wikipedia summaries.
+* **Automated Email Client:** Voice-compose and send emails via SMTP; listen to unread incoming emails via IMAP.
+* **WhatsApp Automation:** Instant WhatsApp message delivery to stored SQLite database contacts.
+* **Network Telemetry:** Live ping and bandwidth speed diagnostics using `speedtest-cli`.
+
+---
+
+## 📂 System Architecture
 
 ```text
-voiceAssistance/
-│
-├── main.py             # Core Logic (AI, Voice, Commands)
-├── gui.py              # User Interface (PyQt5, Animations)
-├── contact.db          # SQLite Database for Phone/Emails
-├── .env                # API Keys (Keep this private!)
-├── image.png           # Reactor Core Image asset
-└── font/               # Custom Sci-Fi Fonts
+Cypher-AI/
+├── gui.py              # Holographic PyQt5 HUD, Arc Reactor & Audio Visualizer
+├── main.py             # Core Voice Pipeline, Gemini AI, & Command Router
+├── requirements.txt    # Python dependencies
+├── contact.db          # SQLite Database for Phone & Email Contacts
+├── chat_memory.json    # Persistent multi-turn dialogue memory
+├── .env                # API Keys & Secrets (Private)
+├── font/               # Custom Sci-Fi & Monospace Fonts
+└── screenshots/        # High-resolution HUD state captures
+    ├── cypher_gui_idle.png
+    ├── cypher_gui_listening.png
+    ├── cypher_gui_processing.png
+    └── cypher_gui_speaking.png
+```
 
+```mermaid
+flowchart TD
+    A["User Voice Input"] --> B["Wake Word Detector ('Cypher')"]
+    B --> C["SpeechRecognition (Google Speech-to-Text)"]
+    C --> D{"Command Router"}
+    
+    D -->|"System Automation"| E["PyAutoGUI / OS / psutil"]
+    D -->|"Web / Info Retrieval"| F["Weather / News / Wikipedia API"]
+    D -->|"Communications"| G["SMTP / IMAP / WhatsApp"]
+    D -->|"Conversational Reasoning"| H["Google Gemini 1.5 Flash"]
+    
+    H --> I["Microsoft Edge-TTS Engine"]
+    I --> J["Pygame Audio Stream"]
+    
+    C -.->|"State: LISTENING"| K["PyQt5 Sci-Fi HUD"]
+    H -.->|"State: PROCESSING"| K
+    J -.->|"State: SPEAKING"| K
+    K -.->|"State: IDLE / STANDBY"| K
 ```
 
 ---
 
-## 🚀 Installation & Setup
+## 🚀 Installation & Quick Start
 
 ### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/pattanayakpratik/Cypher-AI.git
 cd Cypher-AI
-
 ```
 
-### 2. Install Dependencies
+### 2. Create and Activate Virtual Environment
 
-Make sure you have Python installed. Then run:
+```bash
+# Windows
+python -m venv .venv
+.\.venv\Scripts\activate
+```
+
+### 3. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
-
 ```
 
-*(Common libs: `pyqt5`, `speechrecognition`, `google-generativeai`, `pygame`, `edge-tts`, `pyautogui`, `psutil`)*
+> [!NOTE]
+> If you encounter audio driver issues with `PyAudio` on Windows, install the precompiled `.whl` wheel for your Python version or run `pip install pipwin && pipwin install pyaudio`.
 
-### 3. Configure Environment Variables
+### 4. Configure Environment Variables
 
-Create a `.env` file in the root folder and add your API keys:
+Create a `.env` file in the root directory:
 
 ```ini
-GEMINI_API_KEY=your_gemini_key_here
-OPENWEATHER_KEY=your_weather_key_here
-NEWS_API_KEY=your_news_key_here
-EMAIL_USER=your_email@gmail.com
-EMAIL_PASS=your_app_password
+# Google Gemini AI Key (Get from https://aistudio.google.com/)
+GEMINI_API_KEY=your_gemini_api_key_here
 
+# Weather & News APIs
+OPENWEATHER_KEY=your_openweather_api_key
+NEWS_API_KEY=your_newsdata_api_key
+
+# Email Credentials (Optional: use Google App Password)
+EMAIL_USER=your_email@gmail.com
+EMAIL_PASS=your_google_app_password
 ```
 
-### 4. Setup Database
+### 5. Launch Cypher
 
-Ensure `contact.db` exists with a table `contacts` (name, phone_number) and `email_contacts` (name, email) for the communication features to work.
-
-### 5. Run Cypher
-
-Start the GUI (which automatically loads the backend):
+Start the holographic interface (which automatically initializes the voice engine):
 
 ```bash
 python gui.py
-
 ```
 
 ---
 
-## 🎮 Usage Guide
+## 🎮 Command Matrix
 
-* **Start:** Click **"INITIATE PROTOCOL"** on the GUI.
-* **Wake Up:** Say **"Cypher"** to grab her attention.
-* **Commands:**
-* *"Open VS Code"*
-* *"What is the weather in Mumbai?"*
-* *"Search Wikipedia for Artificial Intelligence"*
-* *"Send an email to [Name]"*
-* *"Turn off"* (Initiates shutdown sequence)
-
-
-
----
-
-## 🛡️ Future Improvements
-
-* [ ] **Vision Mode:** Analyze screen content using Gemini Vision.
-* [ ] **Offline Wake Word:** Integrate Porcupine for faster wake-word detection.
-* [ ] **Media Controls:** Spotify/YouTube Playback control.
+| Category | Example Voice Trigger | Action Performed |
+| :--- | :--- | :--- |
+| **System** | *"Open Chrome"* / *"Open VS Code"* | Launches target application executable |
+| **Navigation** | *"Switch tab"* / *"Close window"* | Sends keyboard shortcuts via PyAutoGUI |
+| **Hardware** | *"Increase volume"* / *"Set brightness to 80"* | Modifies Windows hardware audio & display levels |
+| **AI Intelligence** | *"Explain quantum computing in simple terms"* | Synthesizes response with Gemini 1.5 Flash |
+| **Real-Time Data** | *"What's the weather in Mumbai?"* | Fetches temperature, humidity & conditions |
+| **News** | *"Give me the latest tech headlines"* | Reads top 3 articles from NewsData API |
+| **Research** | *"Search Wikipedia for Artificial Intelligence"* | Summarizes first 2 sentences from Wikipedia |
+| **Communication** | *"Send an email to John"* | Hands-free email composition and dispatch |
+| **Dictation** | *"Type what I say: Meeting postponed to 5 PM"* | Types dictated text into active window cursor |
+| **Power** | *"Turn off"* / *"Shutdown system"* | Closes Cypher and shuts down Windows |
 
 ---
 
-**Built with 💙 by [Pratik Pattanayak](mailto:mr.pratikpattanayak@gmail.com)**
+## 🛡️ Roadmap
+
+- [x] Multi-ring animated Arc Reactor with radar calibration & orbital beads
+- [x] 32-band real-time audio spectrum frequency visualizer
+- [x] 12-segment illuminated LED telemetry meters for system diagnostics
+- [x] Native 4-state visual sync (Idle, Listening, Processing, Speaking)
+- [ ] Multimodal Screen Vision via Gemini 1.5 Pro / Flash Vision
+- [ ] Offline wake-word detection via Picovoice Porcupine
+- [ ] Direct Spotify IPC playback integration
+- [ ] Customizable HUD color themes (Stark Crimson & Gold, Cyberpunk Neon, Matrix Green)
+
+---
+
+## 👨‍💻 Author & Connect
+
+**Pratik Pattanayak**  
+*Backend & AI Engineer | AWS Certified ML Practitioner*
+
+- 🌐 **Portfolio:** [pattanayakpratik.vercel.app](https://pattanayakpratik.vercel.app)
+- 🐙 **GitHub:** [@pattanayakpratik](https://github.com/pattanayakpratik)
+- 💼 **LinkedIn:** [Pratik Pattanayak](https://www.linkedin.com/in/pattanayakpratik)
+- 📧 **Email:** [mr.pratikpattanayak@gmail.com](mailto:mr.pratikpattanayak@gmail.com)
+
+---
+
+<div align="center">
+  <sub>Engineered with 💙 using Python, PyQt5, and Google Gemini. Star ⭐ the repository if you found this project inspiring!</sub>
+</div>
