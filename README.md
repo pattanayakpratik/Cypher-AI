@@ -98,23 +98,22 @@ Cypher-AI/
 ```
 
 ```mermaid
-flowchart TD
-    A["User Voice Input"] --> B["Wake Word Detector ('Cypher')"]
-    B --> C["SpeechRecognition (Google Speech-to-Text)"]
-    C --> D{"Command Router"}
+graph TD
+    A[User Voice Input] --> B[Wake Word Detector: Cypher]
+    B --> C[SpeechRecognition: Google STT]
+    C --> D{Command Router}
     
-    D -->|"System Automation"| E["PyAutoGUI / OS / psutil"]
-    D -->|"Web / Info Retrieval"| F["Weather / News / Wikipedia API"]
-    D -->|"Communications"| G["SMTP / IMAP / WhatsApp"]
-    D -->|"Conversational Reasoning"| H["Google Gemini 1.5 Flash"]
+    D -->|System Automation| E[PyAutoGUI / OS / psutil]
+    D -->|Web Intelligence| F[Weather / News / Wikipedia API]
+    D -->|Communications| G[SMTP / IMAP / WhatsApp]
+    D -->|AI Reasoning| H[Google Gemini 1.5 Flash]
     
-    H --> I["Microsoft Edge-TTS Engine"]
-    I --> J["Pygame Audio Stream"]
+    H --> I[Microsoft Edge-TTS Engine]
+    I --> J[Pygame Audio Stream]
     
-    C -.->|"State: LISTENING"| K["PyQt5 Sci-Fi HUD"]
-    H -.->|"State: PROCESSING"| K
-    J -.->|"State: SPEAKING"| K
-    K -.->|"State: IDLE / STANDBY"| K
+    C -.->|State: LISTENING| K[PyQt5 Sci-Fi HUD]
+    H -.->|State: PROCESSING| K
+    J -.->|State: SPEAKING| K
 ```
 
 ---
