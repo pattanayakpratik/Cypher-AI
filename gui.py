@@ -6,10 +6,11 @@ import threading
 import time
 import math
 import random
+import webbrowser
 import psutil 
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal, QRectF, QPointF
-from main import CypherCore
+from main import CypherCore, save_env_keys, get_app_dir, get_env_path
 
 # =============================================================================
 # COLOR PALETTE (Cyberpunk / F.R.I.D.A.Y. Sci-Fi HUD)
@@ -31,11 +32,15 @@ COLOR_PROCESS = "#3a86ff"          # High-Energy Plasma Blue
 COLOR_SPEAK = "#ff007f"            # Hot Neon Magenta / Vocalizing
 
 # =============================================================================
-# FONT LOADER
+# STANDALONE ASSET PATH & FONT LOADER
 # =============================================================================
+def get_resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller bundle."""
+    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_path, relative_path)
+
 def get_font_family(file_name):
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    font_path = os.path.join(current_dir, "font", file_name)
+    font_path = get_resource_path(os.path.join("font", file_name))
     if not os.path.exists(font_path): 
         return "Segoe UI Black"
     font_id = QtGui.QFontDatabase.addApplicationFont(font_path)
@@ -729,6 +734,458 @@ class TerminalBox(QtWidgets.QTextEdit):
 
 
 # =============================================================================
+# WIDGET: HOLOGRAPHIC CREDENTIALS VAULT & PROTOCOL CONFIGURATION
+# =============================================================================
+class SettingsDialog(QtWidgets.QDialog):
+    """
+    Holographic Sci-Fi Credentials Vault & Settings Dialog.
+    Enables users (especially when running as a standalone .exe) to configure,
+    test, and persist their API keys and credentials directly from the GUI.
+    """
+    sig_test_result = pyqtSignal(bool, str)
+
+    def __init__(self, cypher_core, parent=None):
+        super().__init__(parent)
+        self.cypher = cypher_core
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedSize(740, 720)
+        self.oldPos = self.pos()
+
+        self.tech_font = get_font_family("WarriotTechItalic-YqOoa.ttf")
+        self.inputs = {}
+        self.sig_test_result.connect(self._on_test_finished)
+
+        # Outer root layout
+        root_layout = QtWidgets.QVBoxLayout(self)
+        root_layout.setContentsMargins(10, 10, 10, 10)
+
+        # Main frame with dark obsidian glassmorphism
+        frame = QtWidgets.QFrame()
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: rgba(4, 9, 18, 0.96);
+                border: 1px solid rgba(0, 217, 246, 0.55);
+                border-radius: 8px;
+            }}
+        """)
+        frame_layout = QtWidgets.QVBoxLayout(frame)
+        frame_layout.setContentsMargins(20, 16, 20, 16)
+        frame_layout.setSpacing(12)
+
+        # 1. Header Bar
+        header_bar = QtWidgets.QHBoxLayout()
+        title_box = QtWidgets.QVBoxLayout()
+        title_box.setSpacing(2)
+        lbl_title = QtWidgets.QLabel("CYPHER CONFIGURATION PROTOCOL // CREDENTIAL VAULT")
+        lbl_title.setStyleSheet(f"""
+            color: {COLOR_ACCENT};
+            font-family: 'Consolas', monospace;
+            font-size: 15px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            border: none;
+            background: transparent;
+        """)
+        lbl_sub = QtWidgets.QLabel("RUNTIME SYSTEM KEYS & NEURAL ENGINE ACCESS")
+        lbl_sub.setStyleSheet("color: rgba(0, 217, 246, 0.6); font-family: 'Consolas', monospace; font-size: 10px; letter-spacing: 1px; border: none; background: transparent;")
+        title_box.addWidget(lbl_title)
+        title_box.addWidget(lbl_sub)
+        header_bar.addLayout(title_box)
+
+        header_bar.addStretch()
+
+        btn_close = QtWidgets.QPushButton("✕")
+        btn_close.setFixedSize(32, 26)
+        btn_close.setCursor(Qt.PointingHandCursor)
+        btn_close.clicked.connect(self.reject)
+        btn_close.setStyleSheet(f"""
+            QPushButton {{
+                color: {COLOR_WARN};
+                background: transparent;
+                border: 1px solid {COLOR_WARN};
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLOR_WARN};
+                color: #ffffff;
+            }}
+        """)
+        header_bar.addWidget(btn_close)
+        frame_layout.addLayout(header_bar)
+
+        # Divider
+        divider = QtWidgets.QFrame()
+        divider.setFrameShape(QtWidgets.QFrame.HLine)
+        divider.setStyleSheet("border: none; background-color: rgba(0, 217, 246, 0.25); max-height: 1px;")
+        frame_layout.addWidget(divider)
+
+        # 2. Scrollable Credentials Container
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+            QScrollBar:vertical {
+                background: rgba(0, 20, 35, 0.4);
+                width: 8px;
+                margin: 0px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(0, 217, 246, 0.4);
+                min-height: 20px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #00d9f6;
+            }
+        """)
+
+        content_widget = QtWidgets.QWidget()
+        content_widget.setStyleSheet("background: transparent;")
+        content_layout = QtWidgets.QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(4, 4, 10, 4)
+        content_layout.setSpacing(14)
+
+        # Section 1: Neural Cores
+        content_layout.addWidget(self._make_section_header("01 // NEURAL INTELLIGENCE ENGINE"))
+        content_layout.addWidget(self._make_credential_row(
+            key_name="GEMINI_API_KEY",
+            label_text="Google Gemini API Key",
+            is_required=True,
+            helper_url="https://aistudio.google.com/app/apikey",
+            helper_btn_text="🔑 GET FREE KEY",
+            description="Required for conversational reasoning, general query synthesis, and AI workflows."
+        ))
+        content_layout.addWidget(self._make_credential_row(
+            key_name="GROQ_API_KEY",
+            label_text="Groq API Key",
+            is_required=False,
+            helper_url="https://console.groq.com/keys",
+            helper_btn_text="⚡ GET KEY",
+            description="High-speed fallback engine when Gemini is rate-limited or offline."
+        ))
+
+        # Section 2: Satellite & Telemetry
+        content_layout.addWidget(self._make_section_header("02 // SATELLITE & TELEMETRY FEEDS"))
+        content_layout.addWidget(self._make_credential_row(
+            key_name="OPENWEATHER_KEY",
+            label_text="OpenWeather API Key",
+            is_required=False,
+            helper_url="https://home.openweathermap.org/api_keys",
+            helper_btn_text="⛅ GET KEY",
+            description="Enables live real-time weather and temperature queries for any city."
+        ))
+        content_layout.addWidget(self._make_credential_row(
+            key_name="NEWS_API_KEY",
+            label_text="NewsData.io API Key",
+            is_required=False,
+            helper_url="https://newsdata.io/register",
+            helper_btn_text="📰 GET KEY",
+            description="Enables live world news and tech headline feeds."
+        ))
+
+        # Section 3: Communications
+        content_layout.addWidget(self._make_section_header("03 // AUTOMATED COMMUNICATIONS"))
+        content_layout.addWidget(self._make_credential_row(
+            key_name="EMAIL_USER",
+            label_text="Gmail Address",
+            is_required=False,
+            is_password=False,
+            description="Your Gmail address for automated email dispatch and unread inbox checks."
+        ))
+        content_layout.addWidget(self._make_credential_row(
+            key_name="EMAIL_PASS",
+            label_text="Google App Password",
+            is_required=False,
+            helper_url="https://myaccount.google.com/apppasswords",
+            helper_btn_text="🔐 APP PASSWORDS",
+            description="16-character Google App Password (not your primary Google password)."
+        ))
+
+        scroll.setWidget(content_widget)
+        frame_layout.addWidget(scroll, 1)
+
+        # 3. Diagnostic Connection Test Bar
+        test_frame = QtWidgets.QFrame()
+        test_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(2, 6, 14, 0.7);
+                border: 1px solid rgba(0, 217, 246, 0.3);
+                border-radius: 6px;
+            }
+        """)
+        test_layout = QtWidgets.QHBoxLayout(test_frame)
+        test_layout.setContentsMargins(10, 8, 10, 8)
+        test_layout.setSpacing(10)
+
+        self.btn_test = QtWidgets.QPushButton("🧪 TEST GEMINI KEY")
+        self.btn_test.setCursor(Qt.PointingHandCursor)
+        self.btn_test.setFixedHeight(30)
+        self.btn_test.setStyleSheet(f"""
+            QPushButton {{
+                background-color: rgba(0, 217, 246, 0.15);
+                color: {COLOR_ACCENT};
+                border: 1px solid {COLOR_ACCENT};
+                border-radius: 4px;
+                font-family: 'Consolas', monospace;
+                font-weight: bold;
+                font-size: 11px;
+                padding: 0 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLOR_ACCENT};
+                color: #04070c;
+            }}
+            QPushButton:disabled {{
+                border-color: #555555;
+                color: #777777;
+            }}
+        """)
+        self.btn_test.clicked.connect(self._run_connection_test)
+        test_layout.addWidget(self.btn_test)
+
+        self.lbl_test_status = QtWidgets.QLabel("PROBE READY :: VERIFY NEURAL CONNECTION BEFORE SAVING")
+        self.lbl_test_status.setStyleSheet("color: rgba(0, 217, 246, 0.7); font-family: 'Consolas', monospace; font-size: 11px; border: none; background: transparent;")
+        test_layout.addWidget(self.lbl_test_status, 1)
+
+        frame_layout.addWidget(test_frame)
+
+        # 4. Action Controls
+        btn_bar = QtWidgets.QHBoxLayout()
+        btn_bar.setSpacing(10)
+        btn_bar.addStretch()
+
+        btn_cancel = QtWidgets.QPushButton("CANCEL")
+        btn_cancel.setFixedSize(100, 36)
+        btn_cancel.setCursor(Qt.PointingHandCursor)
+        btn_cancel.clicked.connect(self.reject)
+        btn_cancel.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #999999;
+                border: 1px solid #444444;
+                border-radius: 4px;
+                font-family: 'Consolas', monospace;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+                border-color: #777777;
+            }
+        """)
+        btn_bar.addWidget(btn_cancel)
+
+        self.btn_save = QtWidgets.QPushButton("💾 SAVE && APPLY PROTOCOLS")
+        self.btn_save.setFixedSize(220, 36)
+        self.btn_save.setCursor(Qt.PointingHandCursor)
+        self.btn_save.clicked.connect(self._save_credentials)
+        self.btn_save.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_ACCENT};
+                color: #04070c;
+                border: 1px solid {COLOR_ACCENT};
+                border-radius: 4px;
+                font-family: 'Consolas', monospace;
+                font-size: 12px;
+                font-weight: bold;
+                letter-spacing: 1px;
+            }}
+            QPushButton:hover {{
+                background-color: #ffffff;
+                color: #04070c;
+                border-color: #ffffff;
+            }}
+        """)
+        btn_bar.addWidget(self.btn_save)
+
+        frame_layout.addLayout(btn_bar)
+        root_layout.addWidget(frame)
+
+    def _make_section_header(self, text):
+        lbl = QtWidgets.QLabel(text)
+        lbl.setStyleSheet(f"""
+            color: {COLOR_SEC};
+            font-family: 'Consolas', monospace;
+            font-size: 11px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            padding-top: 6px;
+            border: none;
+            background: transparent;
+        """)
+        return lbl
+
+    def _make_credential_row(self, key_name, label_text, is_required=False, helper_url=None, helper_btn_text="GET KEY", description="", is_password=True):
+        row_widget = QtWidgets.QWidget()
+        row_widget.setStyleSheet("background: transparent;")
+        vbox = QtWidgets.QVBoxLayout(row_widget)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(4)
+
+        h_row = QtWidgets.QHBoxLayout()
+        h_row.setSpacing(8)
+
+        lbl_name = QtWidgets.QLabel(label_text)
+        lbl_name.setStyleSheet("color: #ffffff; font-family: 'Consolas', monospace; font-size: 12px; font-weight: bold; border: none;")
+        h_row.addWidget(lbl_name)
+
+        badge = QtWidgets.QLabel("[REQUIRED]" if is_required else "[OPTIONAL]")
+        badge_style = f"color: {COLOR_ACCENT}; background-color: rgba(0, 217, 246, 0.15); border: 1px solid {COLOR_ACCENT};" if is_required else "color: #778899; background: transparent; border: 1px solid #445566;"
+        badge.setStyleSheet(f"{badge_style} font-family: 'Consolas', monospace; font-size: 9px; font-weight: bold; padding: 1px 6px; border-radius: 3px;")
+        h_row.addWidget(badge)
+
+        h_row.addStretch()
+
+        if helper_url:
+            btn_helper = QtWidgets.QPushButton(helper_btn_text)
+            btn_helper.setCursor(Qt.PointingHandCursor)
+            btn_helper.setFixedHeight(22)
+            btn_helper.setStyleSheet(f"""
+                QPushButton {{
+                    color: {COLOR_ACCENT};
+                    background: transparent;
+                    border: 1px solid rgba(0, 217, 246, 0.4);
+                    border-radius: 3px;
+                    font-family: 'Consolas', monospace;
+                    font-size: 10px;
+                    font-weight: bold;
+                    padding: 0 8px;
+                }}
+                QPushButton:hover {{
+                    background-color: rgba(0, 217, 246, 0.2);
+                    border-color: {COLOR_ACCENT};
+                    color: #ffffff;
+                }}
+            """)
+            btn_helper.clicked.connect(lambda _, url=helper_url: webbrowser.open(url))
+            h_row.addWidget(btn_helper)
+
+        vbox.addLayout(h_row)
+
+        if description:
+            lbl_desc = QtWidgets.QLabel(description)
+            lbl_desc.setStyleSheet("color: rgba(200, 220, 240, 0.6); font-family: 'Consolas', monospace; font-size: 10px; border: none;")
+            lbl_desc.setWordWrap(True)
+            vbox.addWidget(lbl_desc)
+
+        inp_row = QtWidgets.QHBoxLayout()
+        inp_row.setSpacing(6)
+
+        line_edit = QtWidgets.QLineEdit()
+        line_edit.setText(os.getenv(key_name, ""))
+        line_edit.setFixedHeight(34)
+        line_edit.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: rgba(2, 6, 12, 0.9);
+                color: {COLOR_ACCENT};
+                border: 1px solid rgba(0, 217, 246, 0.4);
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-family: 'Consolas', monospace;
+                font-size: 13px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {COLOR_ACCENT};
+                background-color: rgba(0, 20, 35, 0.95);
+            }}
+        """)
+        if is_password:
+            line_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+
+        inp_row.addWidget(line_edit, 1)
+
+        if is_password:
+            btn_eye = QtWidgets.QPushButton("👁")
+            btn_eye.setFixedSize(34, 34)
+            btn_eye.setCursor(Qt.PointingHandCursor)
+            btn_eye.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: rgba(0, 20, 35, 0.8);
+                    color: {COLOR_ACCENT};
+                    border: 1px solid rgba(0, 217, 246, 0.4);
+                    border-radius: 4px;
+                    font-size: 13px;
+                }}
+                QPushButton:hover {{
+                    border-color: {COLOR_ACCENT};
+                    background-color: rgba(0, 217, 246, 0.2);
+                }}
+            """)
+            def toggle_echo(le=line_edit, btn=btn_eye):
+                if le.echoMode() == QtWidgets.QLineEdit.Password:
+                    le.setEchoMode(QtWidgets.QLineEdit.Normal)
+                    btn.setText("🔒")
+                else:
+                    le.setEchoMode(QtWidgets.QLineEdit.Password)
+                    btn.setText("👁")
+            btn_eye.clicked.connect(toggle_echo)
+            inp_row.addWidget(btn_eye)
+
+        vbox.addLayout(inp_row)
+        self.inputs[key_name] = line_edit
+        return row_widget
+
+    def _run_connection_test(self):
+        gemini_key = self.inputs.get("GEMINI_API_KEY").text().strip() if "GEMINI_API_KEY" in self.inputs else ""
+        if not gemini_key:
+            self.lbl_test_status.setText("✖ ABORTED: GEMINI API KEY IS REQUIRED")
+            self.lbl_test_status.setStyleSheet("color: #ff4455; font-family: 'Consolas', monospace; font-size: 11px;")
+            return
+
+        self.btn_test.setEnabled(False)
+        self.lbl_test_status.setText("CONNECTING TO GOOGLE AI STUDIO (PROBING NEURAL CORE)...")
+        self.lbl_test_status.setStyleSheet("color: #ffaa00; font-family: 'Consolas', monospace; font-size: 11px;")
+
+        def worker():
+            ok, msg = self.cypher.test_gemini_connection(gemini_key)
+            self.sig_test_result.emit(ok, msg)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @pyqtSlot(bool, str)
+    def _on_test_finished(self, success, message):
+        self.btn_test.setEnabled(True)
+        if success:
+            self.lbl_test_status.setText(f"✔ {message.upper()}")
+            self.lbl_test_status.setStyleSheet(f"color: {COLOR_LISTEN}; font-family: 'Consolas', monospace; font-size: 11px; font-weight: bold;")
+        else:
+            self.lbl_test_status.setText(f"✖ {message.upper()[:75]}")
+            self.lbl_test_status.setStyleSheet(f"color: {COLOR_WARN}; font-family: 'Consolas', monospace; font-size: 11px; font-weight: bold;")
+
+    def _save_credentials(self):
+        new_keys = {}
+        for k, inp in self.inputs.items():
+            new_keys[k] = inp.text().strip()
+
+        save_env_keys(new_keys)
+        self.cypher.reload_api_clients()
+        self.accept()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.oldPos = event.globalPos()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.LeftButton:
+            delta = QPointF(event.globalPos() - self.oldPos)
+            self.move(int(self.x() + delta.x()), int(self.y() + delta.y()))
+            self.oldPos = event.globalPos()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        draw_sci_fi_corners(painter, self.rect().adjusted(10, 10, -10, -10), COLOR_ACCENT, bracket_len=14, thickness=2)
+
+
+# =============================================================================
 # MAIN WINDOW: CYPHER F.R.I.D.A.Y. HUD
 # =============================================================================
 class MainWindow(QtWidgets.QMainWindow):
@@ -799,9 +1256,9 @@ class MainWindow(QtWidgets.QMainWindow):
         top_bar.addWidget(self.mode_pill)
         top_bar.addStretch()
 
-        # Right: Window Control Frame (Minimize & Close)
+        # Right: Window Control Frame (Settings, Minimize & Close)
         control_frame = QtWidgets.QFrame()
-        control_frame.setFixedSize(110, 36)
+        control_frame.setFixedSize(200, 36)
         control_frame.setStyleSheet(f"""
             QFrame {{
                 background-color: rgba(0, 20, 35, 0.85);
@@ -810,8 +1267,31 @@ class MainWindow(QtWidgets.QMainWindow):
             }}
         """)
         ctrl_layout = QtWidgets.QHBoxLayout(control_frame)
-        ctrl_layout.setContentsMargins(4, 3, 4, 3)
+        ctrl_layout.setContentsMargins(5, 3, 5, 3)
         ctrl_layout.setSpacing(4)
+
+        # Config / Settings Button
+        self.btn_config = QtWidgets.QPushButton("⚙ CONFIG")
+        self.btn_config.setFixedSize(82, 28)
+        self.btn_config.clicked.connect(self.open_settings)
+        self.btn_config.setCursor(Qt.PointingHandCursor)
+        self.btn_config.setStyleSheet(f"""
+            QPushButton {{
+                color: {COLOR_ACCENT};
+                background-color: transparent;
+                border: 1px solid {COLOR_SEC};
+                border-radius: 4px;
+                font-family: 'Consolas', monospace;
+                font-weight: bold; 
+                font-size: 11px;
+                letter-spacing: 1px;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(0, 217, 246, 0.25);
+                border: 1px solid {COLOR_ACCENT};
+                color: #ffffff;
+            }}
+        """)
 
         # Minimize Button
         self.btn_min = QtWidgets.QPushButton("─")
@@ -855,6 +1335,7 @@ class MainWindow(QtWidgets.QMainWindow):
             }}
         """)
 
+        ctrl_layout.addWidget(self.btn_config)
         ctrl_layout.addWidget(self.btn_min)
         ctrl_layout.addWidget(self.btn_close)
         top_bar.addWidget(control_frame)
@@ -902,7 +1383,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.left_panel.content_layout.addWidget(self.row_v_mod)
         
         # Center: Multi-Ring Arc Reactor
-        img_path = os.path.join(os.path.dirname(__file__), "image.png")
+        img_path = get_resource_path("image.png")
         self.core = RotatingCore(img_path)
         self.core.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         
@@ -1010,6 +1491,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sys_timer.timeout.connect(self.update_system_stats)
         self.sys_timer.start(1000) 
         self.update_system_stats()
+
+        # Prompt configuration on startup if Gemini API key is missing
+        if not os.getenv("GEMINI_API_KEY"):
+            QTimer.singleShot(600, self.open_settings)
 
     @pyqtSlot(str)
     def on_state_changed(self, state):
@@ -1131,11 +1616,22 @@ class MainWindow(QtWidgets.QMainWindow):
         else: 
             self.stop_system()
             
+    def open_settings(self):
+        """Opens the Holographic Protocol Configuration / Credentials Vault dialog."""
+        dialog = SettingsDialog(self.cypher, self)
+        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            self.terminal.log("CREDENTIALS VAULT :: PROTOCOLS UPDATED & SYNCHRONIZED.")
+
     def start_system(self):
         if self.core.is_active: 
             return
         if hasattr(self, 'ai_thread') and self.ai_thread and self.ai_thread.is_alive():
             self.terminal.log("Waiting for background tasks to terminate...")
+            return
+
+        if not os.getenv("GEMINI_API_KEY"):
+            self.terminal.log("[SYSTEM ALERT] Gemini API key not configured. Opening credentials vault...")
+            self.open_settings()
             return
 
         self.core.is_active = True

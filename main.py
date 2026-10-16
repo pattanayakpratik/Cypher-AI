@@ -1,4 +1,5 @@
 import os
+import sys
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ["OMP_NUM_THREADS"] = "1"
 
@@ -29,12 +30,70 @@ from groq import Groq
 import wikipedia
 import re
 
+# --- STANDALONE & PATH RESOLUTION HELPERS ---
+def get_app_dir():
+    """Returns directory containing executable or script for persistent user data."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
-load_dotenv()
+def get_env_path():
+    return os.path.join(get_app_dir(), ".env")
+
+def get_db_path():
+    return os.path.join(get_app_dir(), "contact.db")
+
+def get_history_path():
+    return os.path.join(get_app_dir(), "chat_memory.json")
+
+def save_env_keys(keys_dict, env_path=None):
+    """Safely updates or appends environment variables to .env and synchronizes os.environ."""
+    if env_path is None:
+        env_path = get_env_path()
+        
+    existing_lines = []
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                existing_lines = f.readlines()
+        except Exception:
+            try:
+                with open(env_path, "r", encoding="latin-1") as f:
+                    existing_lines = f.readlines()
+            except Exception:
+                existing_lines = []
+
+    updated_keys = set()
+    new_lines = []
+    for line in existing_lines:
+        trimmed = line.strip()
+        if trimmed and not trimmed.startswith("#") and "=" in trimmed:
+            k, _ = trimmed.split("=", 1)
+            k = k.strip()
+            if k in keys_dict:
+                new_lines.append(f"{k}={keys_dict[k]}\n")
+                updated_keys.add(k)
+                continue
+        new_lines.append(line if line.endswith("\n") else line + "\n")
+
+    for k, v in keys_dict.items():
+        if k not in updated_keys and v:
+            new_lines.append(f"{k}={v}\n")
+
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+    for k, v in keys_dict.items():
+        if v:
+            os.environ[k] = str(v)
+        elif k in os.environ:
+            os.environ.pop(k, None)
+
+load_dotenv(get_env_path())
 
 # --- CONSTANTS & DICTIONARIES ---
 ERROR_THRESHOLD = 300
-HISTORY_FILE = "chat_memory.json"
+HISTORY_FILE = get_history_path()
 
 WEB_LINKS = {
     "google": "https://www.google.com",
@@ -178,6 +237,45 @@ class CypherCore:
     def ok_sir(self):
         self.speak("Okay sir")
 
+    def reload_api_clients(self):
+        """Re-initializes API clients dynamically after .env credentials change."""
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if gemini_key:
+            try:
+                self.gemini_client = genai.Client(api_key=gemini_key)
+                self.ui_print("Neural Core: Gemini client re-initialized successfully.")
+            except Exception as e:
+                self.ui_print(f"Neural Core: Gemini init error: {e}")
+        else:
+            self.gemini_client = None
+
+        groq_key = os.getenv("GROQ_API_KEY")
+        if groq_key:
+            try:
+                self.groq_client = Groq(api_key=groq_key)
+                self.ui_print("Backup Core: Groq client re-initialized.")
+            except Exception as e:
+                self.ui_print(f"Backup Core: Groq init error: {e}")
+        else:
+            self.groq_client = None
+
+    def test_gemini_connection(self, api_key=None):
+        """Tests if the Gemini API key is valid and can generate responses."""
+        key = (api_key or os.getenv("GEMINI_API_KEY") or "").strip()
+        if not key:
+            return False, "Missing API Key. Please provide a valid Gemini key."
+        try:
+            test_client = genai.Client(api_key=key)
+            resp = test_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents="ping"
+            )
+            if resp and resp.text:
+                return True, "Connection verified: Gemini 2.5 Flash is active."
+            return True, "Connection verified."
+        except Exception as e:
+            return False, f"Connection failed: {str(e)}"
+
     def check_env_variable(self):
         """Checks for required environment variables and initializes API clients."""
         self.ui_print("Performing system checks...")
@@ -194,18 +292,15 @@ class CypherCore:
         if missing_keys:
             self.ui_print(f"Warning: The following environment variables are missing: {', '.join(missing_keys)}")
         
-        if os.getenv("GEMINI_API_KEY"):
-            self.gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        if os.getenv("GROQ_API_KEY"):
-            self.groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+        self.reload_api_clients()
             
-        if not os.path.exists("contact.db"):
-            self.ui_print("Warning: contact.db database file is missing.")
+        if not os.path.exists(get_db_path()):
+            self.ui_print("Notice: Initializing local contacts database...")
         self.init_db()
 
     def init_db(self):
         """Initializes the SQLite database and creates necessary tables if they don't exist."""
-        conn = sqlite3.connect("contact.db")
+        conn = sqlite3.connect(get_db_path())
         cursor = conn.cursor()
         cursor.execute('''CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, phone_number TEXT)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS email_contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, email TEXT)''')
@@ -245,7 +340,7 @@ class CypherCore:
                 return
                 
             try:
-                conn = sqlite3.connect("contact.db")
+                conn = sqlite3.connect(get_db_path())
                 cursor = conn.cursor()
                 cursor.execute("SELECT id FROM contacts WHERE name=?", (name.lower(),))
                 if cursor.fetchone():
@@ -281,7 +376,7 @@ class CypherCore:
                 return
             
             try:
-                conn = sqlite3.connect("contact.db")
+                conn = sqlite3.connect(get_db_path())
                 cursor = conn.cursor()
                 cursor.execute("SELECT id FROM email_contacts WHERE name=?", (name.lower(),))
                 if cursor.fetchone():
@@ -538,7 +633,7 @@ class CypherCore:
     def get_email_from_db(self, name_spoken):
         """Retrieves an email address from the database based on the spoken name. Handles database errors gracefully and informs the user if a database error occurs."""
         try:
-            conn = sqlite3.connect("contact.db")
+            conn = sqlite3.connect(get_db_path())
             cursor = conn.cursor()
             cursor.execute("SELECT email FROM email_contacts WHERE LOWER(name) = ?", (name_spoken.lower().strip(),))
             result = cursor.fetchone()
@@ -741,7 +836,7 @@ class CypherCore:
     def get_whatsapp_number_from_db(self, name_spoken):
         """Retrieves a WhatsApp number from the database based on the spoken name. Cleans and formats the phone number to ensure it is in the correct format for sending messages. Handles database errors gracefully and informs the user if a database error occurs."""
         try:
-            conn = sqlite3.connect("contact.db")
+            conn = sqlite3.connect(get_db_path())
             cursor = conn.cursor()
             cursor.execute("SELECT phone_number FROM contacts WHERE LOWER(name) = ?", (name_spoken.lower().strip(),))
             result = cursor.fetchone()

@@ -33,6 +33,17 @@ Cypher features an interactive, reactive sci-fi interface built on PyQt5 that dy
 | ![Processing State](screenshots/cypher_gui_processing.png) | ![Speaking State](screenshots/cypher_gui_speaking.png) |
 | *Electric-blue vortex hyperspeed rotation with accelerated energy arcs while Gemini synthesizes responses.* | *Harmonic vocal pulse, neon-magenta HUD shift, and active 32-band audio spectrum equalizer.* |
 
+<br/>
+
+<div align="center">
+
+### ⚙️ Protocol Configuration & Credentials Vault
+
+![Credentials Vault](screenshots/cypher_settings_dialog.png)
+*Built-in Holographic Credentials Vault: Configure API keys, test live connections to Google AI Studio, and hot-reload settings with zero restart required.*
+
+</div>
+
 ---
 
 ## ⚡ Key Features
@@ -43,6 +54,7 @@ Cypher features an interactive, reactive sci-fi interface built on PyQt5 that dy
 * **32-Band Audio Spectrum Equalizer (`VoiceVisualizer`):** Real-time audio frequency visualizer with harmonic sine dynamics and floating white peak caps that realistically decay.
 * **12-Segment LED Telemetry Gauges (`SegmentedGauge`):** Hardware diagnostics for **CPU Load**, **Memory Allocation**, **Battery Status**, and **Disk Storage** with dynamic color warning shifts (Cyan ➔ Amber ➔ Red).
 * **Cyberpunk Corner Reticles & Terminal:** Framed by HUD corner tech brackets `[ ┏ ┓ ┗ ┛ ]`, a real-time status pill, and a hacker-style terminal log with typewriter animation.
+* **Standalone Credentials Vault (`SettingsDialog`):** Interactive settings modal accessible via `[⚙ CONFIG]` or auto-prompted on first run. End users of the standalone `.exe` can enter their API keys (Gemini, Groq, OpenWeather, NewsData, Email), probe live connections to Google AI Studio, and hot-reload credentials without ever touching code or manually creating a `.env` file.
 
 ### 🤖 Generative AI & Conversational Memory
 * **Google Gemini 1.5 Flash:** High-speed conversational reasoning, code assistance, and witty personality.
