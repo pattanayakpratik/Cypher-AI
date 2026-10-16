@@ -349,6 +349,7 @@ class CypherCore:
                 
                 channel = pygame.mixer.Channel(0)
                 channel.play(sound)
+                self.set_ui_state("speaking")
 
                 while channel.get_busy():
                     if self.stop_speaking_flag or my_id != self.speech_id_counter:

@@ -4,95 +4,311 @@ os.environ["OMP_NUM_THREADS"] = "1"
 import sys
 import threading
 import time
+import math
+import random
 import psutil 
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal, QRectF, QPointF
 from main import CypherCore
 
-# --- CONFIGURATION ---
-COLOR_BG = "#05080d"        # Deep Space Black
-COLOR_ACCENT = "#00d9f6"    # Cyan Neon
-COLOR_SEC = "#005f7f"       # Dimmer Cyan
+# =============================================================================
+# COLOR PALETTE (Cyberpunk / F.R.I.D.A.Y. Sci-Fi HUD)
+# =============================================================================
+COLOR_BG = "#04070c"               # Deep Space Obsidian
+COLOR_PANEL_BG = "rgba(6, 14, 24, 0.78)"  # Frosted Glass Tint
+COLOR_ACCENT = "#00d9f6"           # High-Volt Cyan
+COLOR_ACCENT_DIM = "rgba(0, 217, 246, 0.25)"
+COLOR_SEC = "#005f7f"              # Subdued Cyan
+COLOR_BORDER = "rgba(0, 217, 246, 0.35)"
 COLOR_TEXT = "#ffffff"
-COLOR_WARN = "#ff3333"      # Red for Close
+COLOR_TEXT_DIM = "rgba(0, 217, 246, 0.85)"
+COLOR_WARN = "#ff3344"             # Neon Red (Shutdown / Alarm)
 
-# --- CONTEXT COLORS ---
-COLOR_LISTEN = "#00ff00"    # Green for Listening
-COLOR_PROCESS = "#0088ff"   # Deep Blue for Processing
+# Contextual State Colors
+COLOR_IDLE = "#00d9f6"             # Cyan Neon
+COLOR_LISTEN = "#00ff77"           # Matrix Emerald Green
+COLOR_PROCESS = "#3a86ff"          # High-Energy Plasma Blue
+COLOR_SPEAK = "#ff007f"            # Hot Neon Magenta / Vocalizing
 
-# --- FONT LOADER ---
+# =============================================================================
+# FONT LOADER
+# =============================================================================
 def get_font_family(file_name):
     current_dir = os.path.dirname(os.path.abspath(__file__))
     font_path = os.path.join(current_dir, "font", file_name)
-    if not os.path.exists(font_path): return "Segoe UI Black"
+    if not os.path.exists(font_path): 
+        return "Segoe UI Black"
     font_id = QtGui.QFontDatabase.addApplicationFont(font_path)
-    if font_id == -1: return "Segoe UI Black"
+    if font_id == -1: 
+        return "Segoe UI Black"
     return QtGui.QFontDatabase.applicationFontFamilies(font_id)[0]
 
-class HUDPanel(QtWidgets.QWidget):
-    """Side Panels simulating Jarvis Data Streams"""
+
+# =============================================================================
+# DRAWING HELPER: SCI-FI CORNER BRACKETS
+# =============================================================================
+def draw_sci_fi_corners(painter, rect, color, bracket_len=14, thickness=2):
+    """Draws tech HUD corner brackets [ ┏ ┓ ┗ ┛ ] around a bounding rectangle."""
+    painter.save()
+    pen = QtGui.QPen(QtGui.QColor(color))
+    pen.setWidth(thickness)
+    painter.setPen(pen)
+
+    x, y, w, h = rect.x(), rect.y(), rect.width(), rect.height()
+
+    # Top-Left [┏]
+    painter.drawLine(x, y, x + bracket_len, y)
+    painter.drawLine(x, y, x, y + bracket_len)
+
+    # Top-Right [┓]
+    painter.drawLine(x + w, y, x + w - bracket_len, y)
+    painter.drawLine(x + w, y, x + w, y + bracket_len)
+
+    # Bottom-Left [┗]
+    painter.drawLine(x, y + h, x + bracket_len, y + h)
+    painter.drawLine(x, y + h, x, y + h - bracket_len)
+
+    # Bottom-Right [┛]
+    painter.drawLine(x + w, y + h, x + w - bracket_len, y + h)
+    painter.drawLine(x + w, y + h, x + w, y + h - bracket_len)
+
+    painter.restore()
+
+
+# =============================================================================
+# WIDGET: SEGMENTED LED BAR GAUGE (CPU / RAM / Battery / Disk)
+# =============================================================================
+class SegmentedGauge(QtWidgets.QWidget):
+    """Futuristic segmented LED bar meter (12 neon blocks)."""
+    def __init__(self, label, font_family, parent=None):
+        super().__init__(parent)
+        self.label = label
+        self.font_family = font_family
+        self.value = 0.0          # Current percentage (0 to 100)
+        self.target_value = 0.0   # Target for smooth interpolation
+        self.sub_text = ""        # Optional extra text (e.g. "[CHARGING]")
+        self.total_segments = 12
+        self.setFixedHeight(34)
+        
+        # Smooth interpolation timer
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self._step_anim)
+        self.anim_timer.start(30)
+
+    def set_value(self, val, sub_text=""):
+        self.target_value = max(0.0, min(100.0, float(val)))
+        self.sub_text = sub_text
+
+    def _step_anim(self):
+        diff = self.target_value - self.value
+        if abs(diff) > 0.4:
+            self.value += diff * 0.2
+            self.update()
+        elif self.value != self.target_value:
+            self.value = self.target_value
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+
+        w, h = self.width(), self.height()
+        
+        # 1. Label on left
+        painter.setPen(QtGui.QColor(COLOR_TEXT_DIM))
+        lbl_font = QtGui.QFont("Consolas", 11, QtGui.QFont.Bold)
+        painter.setFont(lbl_font)
+        painter.drawText(0, 0, 110, h, Qt.AlignVCenter | Qt.AlignLeft, self.label)
+
+        # 2. Segmented LED Bars in middle
+        bar_x = 115
+        val_w = 60
+        bar_w = w - bar_x - val_w
+        if bar_w > 40:
+            seg_gap = 3
+            seg_w = max(3, (bar_w - (self.total_segments - 1) * seg_gap) / self.total_segments)
+            seg_h = 10
+            seg_y = (h - seg_h) // 2
+
+            active_count = int(round((self.value / 100.0) * self.total_segments))
+
+            for i in range(self.total_segments):
+                sx = bar_x + i * (seg_w + seg_gap)
+                rect = QRectF(sx, seg_y, seg_w, seg_h)
+
+                if i < active_count:
+                    # Color shift: Cyan (<70%) -> Amber (70-85%) -> Red (>85%)
+                    if self.value < 70:
+                        seg_color = QtGui.QColor(COLOR_ACCENT)
+                    elif self.value < 85:
+                        seg_color = QtGui.QColor("#ffb703")
+                    else:
+                        seg_color = QtGui.QColor(COLOR_WARN)
+                    
+                    painter.fillRect(rect, seg_color)
+                else:
+                    # Inactive dim segment
+                    painter.fillRect(rect, QtGui.QColor(0, 95, 127, 45))
+
+        # 3. Numeric Percentage readout on right
+        val_str = f"{int(round(self.value))}%"
+        if self.sub_text:
+            val_str = f"{val_str}"
+
+        painter.setPen(QtGui.QColor(COLOR_ACCENT if self.value < 85 else COLOR_WARN))
+        num_font = QtGui.QFont("Consolas", 11, QtGui.QFont.Bold)
+        painter.setFont(num_font)
+        painter.drawText(w - val_w, 0, val_w, h, Qt.AlignVCenter | Qt.AlignRight, val_str)
+
+
+# =============================================================================
+# WIDGET: DATA STREAM ROW (Text + Tech Pill / Indicator)
+# =============================================================================
+class DataStreamRow(QtWidgets.QWidget):
+    """Custom data stream row with dynamic sci-fi badges."""
+    def __init__(self, key, parent=None):
+        super().__init__(parent)
+        self.key = key
+        self.val_text = "INITIALIZING..."
+        self.is_active = False
+        self.setFixedHeight(30)
+
+    def set_data(self, val_text, is_active=False):
+        self.val_text = val_text
+        self.is_active = is_active
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+
+        w, h = self.width(), self.height()
+
+        # Key label
+        painter.setPen(QtGui.QColor(COLOR_TEXT_DIM))
+        font_key = QtGui.QFont("Consolas", 11, QtGui.QFont.Bold)
+        painter.setFont(font_key)
+        painter.drawText(0, 0, 110, h, Qt.AlignVCenter | Qt.AlignLeft, self.key)
+
+        # Value text / pill
+        font_val = QtGui.QFont("Consolas", 11, QtGui.QFont.Bold)
+        painter.setFont(font_val)
+
+        # Highlight tag badges
+        if "[ONLINE]" in self.val_text or "ACTIVE" in self.val_text:
+            color = QtGui.QColor(COLOR_LISTEN)
+        elif "[OFFLINE]" in self.val_text or "STANDBY" in self.val_text:
+            color = QtGui.QColor(COLOR_SEC)
+        elif "KB/s" in self.val_text:
+            color = QtGui.QColor(COLOR_ACCENT)
+        else:
+            color = QtGui.QColor(COLOR_TEXT)
+
+        painter.setPen(color)
+        painter.drawText(115, 0, w - 115, h, Qt.AlignVCenter | Qt.AlignLeft, self.val_text)
+
+
+# =============================================================================
+# WIDGET: SCI-FI HUD PANEL (Diagnostics & System Status)
+# =============================================================================
+class HUDPanel(QtWidgets.QFrame):
+    """Sci-Fi HUD card with glassmorphism, corner brackets, and live telemetry."""
     def __init__(self, title, font_family, alignment=Qt.AlignLeft, parent=None):
         super().__init__(parent)
+        self.title_text = title
+        self.font_family = font_family
+        self.alignment = alignment
+
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLOR_PANEL_BG};
+                border: 1px solid {COLOR_BORDER};
+                border-radius: 12px;
+            }}
+        """)
+
         layout = QtWidgets.QVBoxLayout(self)
-        self.labels = [] 
-        
-        # TITLE
-        self.title = QtWidgets.QLabel(title)
-        self.title.setAlignment(alignment)
-        self.title.setStyleSheet(f"""
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(6)
+
+        # Panel Title with Neon Accent Line
+        self.title_lbl = QtWidgets.QLabel(title)
+        self.title_lbl.setStyleSheet(f"""
             color: {COLOR_ACCENT}; 
             font-family: '{font_family}', 'Impact'; 
-            font-size: 30px; 
+            font-size: 26px; 
             letter-spacing: 3px; 
             text-transform: uppercase;
             font-style: italic;
+            border: none;
+            background: transparent;
         """)
-        layout.addWidget(self.title)
-        
-        # DATA LINES
-        for i in range(6):
-            lbl = QtWidgets.QLabel(f"INITIALIZING...")
-            lbl.setStyleSheet(f"""
-                color: rgba(0, 217, 246, 180); 
-                font-family: 'Consolas', monospace; 
-                font-size: 16px;
-                letter-spacing: 1px;
-                font-weight: bold;
-            """)
-            lbl.setAlignment(alignment)
-            layout.addWidget(lbl)
-            self.labels.append(lbl)
-        
+        self.title_lbl.setAlignment(alignment)
+        layout.addWidget(self.title_lbl)
+
+        # Accent tech divider line
+        divider = QtWidgets.QFrame()
+        divider.setFixedHeight(2)
+        divider.setStyleSheet(f"""
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                stop:0 {COLOR_ACCENT}, stop:0.7 {COLOR_SEC}, stop:1 transparent);
+            border: none;
+        """)
+        layout.addWidget(divider)
+        layout.addSpacing(6)
+
+        self.content_layout = QtWidgets.QVBoxLayout()
+        self.content_layout.setSpacing(4)
+        layout.addLayout(self.content_layout)
         layout.addStretch()
 
-    def update_data(self, data_list):
-        for i, text in enumerate(data_list):
-            if i < len(self.labels):
-                self.labels[i].setText(text)
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        # Draw high-tech corner brackets around the panel
+        draw_sci_fi_corners(painter, self.rect().adjusted(2, 2, -2, -2), COLOR_ACCENT, bracket_len=14, thickness=2)
 
+
+# =============================================================================
+# WIDGET: MULTI-RING HOLOGRAPHIC ARC REACTOR (Centerpiece)
+# =============================================================================
 class RotatingCore(QtWidgets.QWidget):
-    """The Centerpiece - Optimized for Low CPU Usage"""
+    """
+    Advanced Multi-Ring Sci-Fi Arc Reactor:
+    - Outer radar calibration ring with 48 tick marks & compass degrees
+    - Triple-segmented outer energy arcs with smooth rotational inertia
+    - Middle orbital dotted ring with 3 orbiting satellite nodes
+    - Dynamic sonar ripple waves expanding outward in 'listening' mode
+    - Hyperspeed particle vortex spin in 'processing' mode
+    - Energetic speech pulse rhythm in 'speaking' mode
+    - Centerpiece avatar with holographic radial backlight and targeting reticle
+    """
     def __init__(self, image_path="image.png", parent=None):
         super().__init__(parent)
-        self.angle_1 = 0
-        self.angle_2 = 0
-        self.angle_3 = 0
+        self.angle_1 = 0.0
+        self.angle_2 = 0.0
+        self.angle_3 = 0.0
+        self.is_active = False 
+        self.state = "idle" # idle | listening | processing | speaking
+
+        # Animation Loop (60 FPS smooth)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.animate)
-        self.timer.start(33) 
-        self.is_active = False 
-        self.state = "idle"
+        self.timer.start(16) 
+
+        # Breathing / Pulse parameters
+        self.pulse_phase = 0.0
         
-        # Pulse Effect Variables
-        self.pulse_alpha = 50
-        self.pulse_dir = 5
-        
+        # Sonar Ripple Waves for 'listening' mode
+        self.sonar_waves = [0.0, 30.0, 60.0]
+
+        # Load avatar image
         self.pixmap = QtGui.QPixmap(image_path)
         if self.pixmap.isNull():
             self.pixmap = QtGui.QPixmap(300, 300)
             self.pixmap.fill(Qt.transparent)
             
-        # Cache for the scaled image (Optimization)
         self.cached_pixmap = None 
 
     def set_state(self, state):
@@ -100,30 +316,41 @@ class RotatingCore(QtWidgets.QWidget):
         self.update()
 
     def animate(self):
-        # Adjusted speeds for smoother animation
-        speed = 2
-        if self.state == "processing": speed = 8
-        elif self.state == "listening": speed = 4
-        elif self.is_active: speed = 5
-        
-        # Pulse Logic (Breathing Effect)
+        # Dynamic speeds mapped to AI state
+        if self.state == "processing":
+            speed = 9.0
+        elif self.state == "listening":
+            speed = 4.5
+        elif self.state == "speaking":
+            speed = 5.5
+        elif self.is_active:
+            speed = 3.0
+        else:
+            speed = 1.4
+
+        # Continuous smooth angle increments
+        self.angle_1 = (self.angle_1 + speed) % 360.0
+        self.angle_2 = (self.angle_2 - (speed * 0.6)) % 360.0
+        self.angle_3 = (self.angle_3 + (speed * 1.4)) % 360.0
+
+        # Breathing sine wave for ambient glow
+        self.pulse_phase += 0.08
+        if self.pulse_phase > 2 * math.pi:
+            self.pulse_phase -= 2 * math.pi
+
+        # Sonar wave ripple progression in listening mode
         if self.state == "listening":
-            self.pulse_alpha += self.pulse_dir
-            if self.pulse_alpha >= 150 or self.pulse_alpha <= 30:
-                self.pulse_dir *= -1
-        
-        self.angle_1 = (self.angle_1 + speed) % 360
-        self.angle_2 = (self.angle_2 - (speed * 0.5)) % 360
-        self.angle_3 = (self.angle_3 + (speed * 0.2)) % 360
+            for i in range(len(self.sonar_waves)):
+                self.sonar_waves[i] = (self.sonar_waves[i] + 1.2) % 65.0
+
         self.update()
 
     def resizeEvent(self, event):
-        # OPTIMIZATION: Scale the image ONLY when resized, not every frame
         w, h = self.width(), self.height()
-        radius = min(w, h) // 2 - 60
+        radius = min(w, h) // 2 - 50
         if radius > 0:
             self.cached_pixmap = self.pixmap.scaled(
-                radius*2, radius*2, 
+                int(radius * 1.55), int(radius * 1.55), 
                 Qt.KeepAspectRatio, 
                 Qt.SmoothTransformation
             )
@@ -134,119 +361,376 @@ class RotatingCore(QtWidgets.QWidget):
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        
+
         w, h = self.width(), self.height()
         cx, cy = w // 2, h // 2
-        radius = min(w, h) // 2 - 60
-        if radius <= 0:
+        radius = min(w, h) // 2 - 55
+        if radius <= 30:
             return
-        # Color Logic
+
+        # ---------------------------------------------------------------------
+        # 1. State Color Selection
+        # ---------------------------------------------------------------------
         if self.state == "listening":
-            base_color = QtGui.QColor(COLOR_LISTEN)
-            arc_color = QtGui.QColor(0, 255, 0, 200)
-            dot_color = QtGui.QColor(0, 255, 0, 100)
+            theme_color = QtGui.QColor(COLOR_LISTEN)
+            accent_arc = QtGui.QColor(0, 255, 119, 220)
+            dot_color = QtGui.QColor(0, 255, 119, 130)
+            status_text = "LISTENING FOR AUDIO INPUT..."
         elif self.state == "processing":
-            base_color = QtGui.QColor(COLOR_PROCESS)
-            arc_color = QtGui.QColor(0, 136, 255, 200)
-            dot_color = QtGui.QColor(0, 136, 255, 100)
+            theme_color = QtGui.QColor(COLOR_PROCESS)
+            accent_arc = QtGui.QColor(58, 134, 255, 230)
+            dot_color = QtGui.QColor(58, 134, 255, 140)
+            status_text = "NEURAL COGNITION RUNNING..."
+        elif self.state == "speaking":
+            theme_color = QtGui.QColor(COLOR_SPEAK)
+            accent_arc = QtGui.QColor(255, 0, 127, 230)
+            dot_color = QtGui.QColor(255, 0, 127, 140)
+            status_text = "SYNTHESIZING VOCAL SPEECH..."
         else:
-            base_color = QtGui.QColor(COLOR_ACCENT)
-            arc_color = QtGui.QColor(0, 217, 246, 200)
-            dot_color = QtGui.QColor(0, 217, 246, 100)
-        
-        # IMPROVEMENT: Draw Pulse Effect
+            theme_color = QtGui.QColor(COLOR_IDLE)
+            accent_arc = QtGui.QColor(0, 217, 246, 200)
+            dot_color = QtGui.QColor(0, 217, 246, 110)
+            status_text = "CYPHER SYSTEM ONLINE :: STANDBY" if self.is_active else "CORE INITIALIZED :: READY"
+
+        # ---------------------------------------------------------------------
+        # 2. Sonar Ripple Waves (Listening Mode)
+        # ---------------------------------------------------------------------
         if self.state == "listening":
             painter.save()
-            brush_color = QtGui.QColor(COLOR_LISTEN)
-            brush_color.setAlpha(self.pulse_alpha)
-            painter.setBrush(QtGui.QBrush(brush_color))
-            painter.setPen(Qt.NoPen)
-            # Draw a glowing circle slightly larger than the core
-            painter.drawEllipse(cx - radius - 15, cy - radius - 15, (radius + 15)*2, (radius + 15)*2)
+            for wave_offset in self.sonar_waves:
+                r_sonar = radius + wave_offset
+                # Opacity fades as wave expands outward
+                alpha = int(max(0, 160 * (1.0 - (wave_offset / 65.0))))
+                pen_sonar = QtGui.QPen(QtGui.QColor(0, 255, 119, alpha))
+                pen_sonar.setWidth(2)
+                painter.setPen(pen_sonar)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(QPointF(cx, cy), r_sonar, r_sonar)
             painter.restore()
 
-        # Optimization: Draw the cached pixmap
+        # ---------------------------------------------------------------------
+        # 3. Outer Radial Radar Tick Marks (Compass Calibration Ring)
+        # ---------------------------------------------------------------------
+        painter.save()
+        painter.translate(cx, cy)
+        r_ticks = radius + 22
+        painter.setPen(QtGui.QColor(0, 217, 246, 60))
+        num_ticks = 48
+        for i in range(num_ticks):
+            angle_rad = i * (2 * math.pi / num_ticks)
+            is_cardinal = (i % 12 == 0)
+            tick_len = 8 if is_cardinal else 4
+            
+            p1_x = (r_ticks) * math.cos(angle_rad)
+            p1_y = (r_ticks) * math.sin(angle_rad)
+            p2_x = (r_ticks + tick_len) * math.cos(angle_rad)
+            p2_y = (r_ticks + tick_len) * math.sin(angle_rad)
+            
+            if is_cardinal:
+                painter.setPen(QtGui.QColor(theme_color.red(), theme_color.green(), theme_color.blue(), 180))
+            else:
+                painter.setPen(QtGui.QColor(theme_color.red(), theme_color.green(), theme_color.blue(), 60))
+            painter.drawLine(QPointF(p1_x, p1_y), QPointF(p2_x, p2_y))
+        painter.restore()
+
+        # ---------------------------------------------------------------------
+        # 4. Triple-Segmented Outer Rotating Energy Arc
+        # ---------------------------------------------------------------------
+        painter.save()
+        painter.translate(cx, cy)
+        painter.rotate(self.angle_1)
+        pen_arc = QtGui.QPen(accent_arc)
+        pen_arc.setWidth(4)
+        pen_arc.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen_arc)
+        r_outer_arc = radius + 10
+        rect_outer = QRectF(-r_outer_arc, -r_outer_arc, r_outer_arc * 2, r_outer_arc * 2)
+        # 3 arcs of 70 degrees each, spaced by 50 degrees
+        painter.drawArc(rect_outer, 0 * 16, 70 * 16)
+        painter.drawArc(rect_outer, 120 * 16, 70 * 16)
+        painter.drawArc(rect_outer, 240 * 16, 70 * 16)
+        painter.restore()
+
+        # ---------------------------------------------------------------------
+        # 5. Middle Orbital Dotted Ring with 3 Satellite Node Beads
+        # ---------------------------------------------------------------------
+        painter.save()
+        painter.translate(cx, cy)
+        painter.rotate(self.angle_2)
+        
+        pen_dot = QtGui.QPen(dot_color)
+        pen_dot.setStyle(Qt.DotLine)
+        pen_dot.setWidth(2)
+        painter.setPen(pen_dot)
+        painter.drawEllipse(QRectF(-radius, -radius, radius * 2, radius * 2))
+
+        # 3 Orbiting Glowing Beads
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QtGui.QBrush(theme_color))
+        for orb_angle in [0, 120, 240]:
+            rad_orb = math.radians(orb_angle)
+            ox = radius * math.cos(rad_orb)
+            oy = radius * math.sin(rad_orb)
+            painter.drawEllipse(QPointF(ox, oy), 4, 4)
+        painter.restore()
+
+        # ---------------------------------------------------------------------
+        # 6. Inner Fast Counter-Rotating Blades
+        # ---------------------------------------------------------------------
+        painter.save()
+        painter.translate(cx, cy)
+        painter.rotate(self.angle_3)
+        pen_inner = QtGui.QPen(QtGui.QColor(theme_color.red(), theme_color.green(), theme_color.blue(), 160))
+        pen_inner.setWidth(2)
+        painter.setPen(pen_inner)
+        r_inner = radius - 15
+        rect_inner = QRectF(-r_inner, -r_inner, r_inner * 2, r_inner * 2)
+        painter.drawArc(rect_inner, 30 * 16, 100 * 16)
+        painter.drawArc(rect_inner, 210 * 16, 100 * 16)
+        painter.restore()
+
+        # ---------------------------------------------------------------------
+        # 7. Holographic Radial Backlight Behind Avatar
+        # ---------------------------------------------------------------------
+        painter.save()
+        pulse_val = 0.5 + 0.5 * math.sin(self.pulse_phase)
+        alpha_glow = int(35 + pulse_val * 45)
+        grad = QtGui.QRadialGradient(cx, cy, radius - 20)
+        grad.setColorAt(0.0, QtGui.QColor(theme_color.red(), theme_color.green(), theme_color.blue(), alpha_glow))
+        grad.setColorAt(0.7, QtGui.QColor(theme_color.red(), theme_color.green(), theme_color.blue(), int(alpha_glow * 0.4)))
+        grad.setColorAt(1.0, Qt.transparent)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QtGui.QBrush(grad))
+        painter.drawEllipse(QPointF(cx, cy), radius - 20, radius - 20)
+        painter.restore()
+
+        # ---------------------------------------------------------------------
+        # 8. Center Avatar with Bezel & Clip Path
+        # ---------------------------------------------------------------------
         if self.cached_pixmap:
             img_x = cx - self.cached_pixmap.width() // 2
             img_y = cy - self.cached_pixmap.height() // 2
             
             path = QtGui.QPainterPath()
-            path.addEllipse(cx - radius + 30, cy - radius + 30, (radius - 30)*2, (radius - 30)*2)
+            path.addEllipse(QPointF(cx, cy), radius - 30, radius - 30)
+            
+            painter.save()
             painter.setClipPath(path)
             painter.drawPixmap(img_x, img_y, self.cached_pixmap)
-            painter.setClipping(False)
+            painter.restore()
 
-        # Drawing Arcs
-        pen = QtGui.QPen(base_color)
-        pen.setWidth(3)
-        
+            # Glowing inner bezel ring
+            pen_bezel = QtGui.QPen(QtGui.QColor(theme_color.red(), theme_color.green(), theme_color.blue(), 180))
+            pen_bezel.setWidth(2)
+            painter.setPen(pen_bezel)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(QPointF(cx, cy), radius - 30, radius - 30)
+
+        # ---------------------------------------------------------------------
+        # 9. Targeting Reticle / Crosshair Ticks (4 Cardinal Corners)
+        # ---------------------------------------------------------------------
         painter.save()
-        painter.translate(cx, cy)
-        painter.rotate(self.angle_1)
-        pen.setColor(arc_color)
-        painter.setPen(pen)
-        painter.drawArc(QtCore.QRectF(-radius+10, -radius+10, (radius-10)*2, (radius-10)*2), 0, 100 * 16)
-        painter.drawArc(QtCore.QRectF(-radius+10, -radius+10, (radius-10)*2, (radius-10)*2), 180 * 16, 100 * 16)
+        painter.setPen(QtGui.QColor(theme_color.red(), theme_color.green(), theme_color.blue(), 140))
+        ret_r1 = radius - 38
+        ret_r2 = radius - 24
+        # North, South, East, West ticks
+        painter.drawLine(cx, cy - ret_r1, cx, cy - ret_r2)
+        painter.drawLine(cx, cy + ret_r1, cx, cy + ret_r2)
+        painter.drawLine(cx - ret_r1, cy, cx - ret_r2, cy)
+        painter.drawLine(cx + ret_r1, cy, cx + ret_r2, cy)
         painter.restore()
 
+        # ---------------------------------------------------------------------
+        # 10. Status Pill Readout Below Core
+        # ---------------------------------------------------------------------
         painter.save()
-        painter.translate(cx, cy)
-        painter.rotate(self.angle_2)
-        pen.setColor(dot_color)
-        pen.setStyle(Qt.DotLine)
-        pen.setWidth(2)
-        painter.setPen(pen)
-        painter.drawEllipse(QtCore.QRectF(-radius, -radius, radius*2, radius*2))
-        painter.restore()
-        
-        painter.setPen(base_color)
-        font = QtGui.QFont("Consolas", 12, QtGui.QFont.Bold)
-        font.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 3)
-        painter.setFont(font)
-        text_rect = QtCore.QRect(0, cy + radius + 15, w, 30)
-        
-        status_text = "CORE_ONLINE"
-        if self.state == "listening": status_text = "LISTENING..."
-        elif self.state == "processing": status_text = "PROCESSING..."
-        
+        font_status = QtGui.QFont("Consolas", 11, QtGui.QFont.Bold)
+        font_status.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 2)
+        painter.setFont(font_status)
+        painter.setPen(theme_color)
+        text_rect = QtCore.QRect(0, cy + radius + 22, w, 28)
         painter.drawText(text_rect, Qt.AlignCenter, status_text)
+        painter.restore()
 
+
+# =============================================================================
+# WIDGET: ANIMATED VOICE WAVEFORM / SPECTRUM EQUALIZER
+# =============================================================================
+class VoiceVisualizer(QtWidgets.QWidget):
+    """
+    Real-time Sci-Fi Sound Frequency Visualizer:
+    - 32 vertical glowing neon bars
+    - Smooth peak indicator caps that float and slowly drop
+    - Animated sine hum during IDLE
+    - Responsive energetic dancing waves during LISTENING and SPEAKING
+    - Cyber matrix data pulse during PROCESSING
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.num_bars = 32
+        self.bar_heights = [4.0] * self.num_bars
+        self.peak_heights = [6.0] * self.num_bars
+        self.state = "idle"
+        self.wave_phase = 0.0
+        self.setFixedHeight(65)
+
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self._step_wave)
+        self.anim_timer.start(24) # ~40 FPS
+
+    def set_state(self, state):
+        self.state = state
+        self.update()
+
+    def _step_wave(self):
+        self.wave_phase += 0.12
+        max_h = self.height() - 20
+
+        for i in range(self.num_bars):
+            idx_ratio = i / float(self.num_bars)
+
+            if self.state == "listening":
+                # Lively reactive microphone dance with harmonic peaks
+                sine1 = math.sin(self.wave_phase * 2.2 + i * 0.45)
+                sine2 = math.cos(self.wave_phase * 1.5 - i * 0.25)
+                noise = random.uniform(0.1, 0.4)
+                target_h = max(5.0, (0.4 * abs(sine1) + 0.4 * abs(sine2) + noise) * max_h)
+            elif self.state == "speaking":
+                # High-energy vocal speech spectrum with centered amplitude peak
+                bell = math.exp(-((idx_ratio - 0.5) ** 2) / 0.12)
+                pulse = abs(math.sin(self.wave_phase * 3.0 + i * 0.3))
+                jitter = random.uniform(0.05, 0.25)
+                target_h = max(6.0, (pulse * 0.75 + jitter) * bell * max_h + 8.0)
+            elif self.state == "processing":
+                # Digital matrix scanning wave sweeping across the spectrum
+                sweep = (math.sin(self.wave_phase * 2.0 - i * 0.3) + 1.0) / 2.0
+                target_h = max(4.0, (sweep ** 2) * max_h * 0.8)
+            else:
+                # Idle: Smooth gentle ambient breathing ripple
+                ripple = math.sin(self.wave_phase + i * 0.25) * 0.5 + 0.5
+                target_h = max(4.0, ripple * 16.0 + 3.0)
+
+            # Smooth approach to target height
+            self.bar_heights[i] += (target_h - self.bar_heights[i]) * 0.35
+
+            # Peak cap drop mechanics
+            if self.bar_heights[i] >= self.peak_heights[i]:
+                self.peak_heights[i] = self.bar_heights[i]
+            else:
+                self.peak_heights[i] = max(self.bar_heights[i], self.peak_heights[i] - 1.2)
+
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+
+        w, h = self.width(), self.height()
+
+        # Color based on state
+        if self.state == "listening":
+            bar_color = QtGui.QColor(COLOR_LISTEN)
+            cap_color = QtGui.QColor("#ffffff")
+        elif self.state == "processing":
+            bar_color = QtGui.QColor(COLOR_PROCESS)
+            cap_color = QtGui.QColor("#90e0ef")
+        elif self.state == "speaking":
+            bar_color = QtGui.QColor(COLOR_SPEAK)
+            cap_color = QtGui.QColor("#ffffff")
+        else:
+            bar_color = QtGui.QColor(COLOR_ACCENT)
+            cap_color = QtGui.QColor("#ffffff")
+
+        # Background frame for spectrum
+        bg_rect = QRectF(0, 0, w, h)
+        painter.fillRect(bg_rect, QtGui.QColor(4, 10, 18, 120))
+        painter.setPen(QtGui.QPen(QtGui.QColor(0, 217, 246, 40), 1))
+        painter.drawRect(bg_rect)
+
+        # Draw sci-fi corner accents on visualizer
+        draw_sci_fi_corners(painter, self.rect(), COLOR_ACCENT, bracket_len=8, thickness=1)
+
+        # Draw bars
+        bar_gap = 3
+        bar_w = max(2.0, (w - 20 - (self.num_bars - 1) * bar_gap) / float(self.num_bars))
+        base_y = h - 10
+
+        for i in range(self.num_bars):
+            bx = 10 + i * (bar_w + bar_gap)
+            bh = self.bar_heights[i]
+            by = base_y - bh
+
+            # Bar with vertical gradient
+            grad = QtGui.QLinearGradient(bx, base_y, bx, by)
+            grad.setColorAt(0.0, QtGui.QColor(bar_color.red(), bar_color.green(), bar_color.blue(), 100))
+            grad.setColorAt(1.0, bar_color)
+
+            painter.fillRect(QRectF(bx, by, bar_w, bh), QtGui.QBrush(grad))
+
+            # Floating peak indicator cap
+            cap_y = base_y - self.peak_heights[i] - 3
+            painter.fillRect(QRectF(bx, cap_y, bar_w, 2), cap_color)
+
+        # Header subtext
+        painter.setPen(QtGui.QColor(0, 217, 246, 120))
+        font_sub = QtGui.QFont("Consolas", 8, QtGui.QFont.Bold)
+        painter.setFont(font_sub)
+        painter.drawText(QRectF(12, 4, w - 24, 16), Qt.AlignLeft, "AUDIO FREQUENCY SPECTRUM :: 44.1 kHz")
+
+
+# =============================================================================
+# WIDGET: TERMINAL BOX (Hacker Typewriter Effect with Sci-Fi Framing)
+# =============================================================================
 class TerminalBox(QtWidgets.QTextEdit):
-    """Terminal with 'Hacker' Typewriter Effect"""
+    """Terminal with high-tech typewriter animation and custom syntax colors."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setStyleSheet(f"""
             QTextEdit {{
-                background-color: rgba(0, 0, 0, 0.6);
+                background-color: rgba(2, 6, 12, 0.85);
                 color: {COLOR_ACCENT};
                 font-family: 'Consolas', monospace;
-                font-size: 16px;
+                font-size: 15px;
                 font-weight: bold;
-                border: 2px solid {COLOR_SEC};
-                border-top: 3px solid {COLOR_ACCENT}; 
+                border: 1px solid {COLOR_BORDER};
+                border-top: 2px solid {COLOR_ACCENT}; 
+                border-radius: 6px;
+                padding: 10px;
             }}
         """)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
-        # --- NEW: Typewriter Logic ---
+        # Typewriter queue
         self.char_queue = []
         self.type_timer = QTimer(self)
         self.type_timer.timeout.connect(self._process_queue)
-        self.type_timer.start(15) # Typing Speed (Lower = Faster)
+        self.type_timer.start(12) 
 
     @pyqtSlot(str)
     def log(self, text):
-        # Add text to queue instead of displaying immediately
         self.char_queue.extend(list(f"> {text.upper()}\n"))
 
     def _process_queue(self):
         if self.char_queue:
-            char = self.char_queue.pop(0)
+            # Process up to 2 characters per tick for fluid typing
+            chunk = ""
+            for _ in range(min(2, len(self.char_queue))):
+                chunk += self.char_queue.pop(0)
             self.moveCursor(QtGui.QTextCursor.End)
-            self.insertPlainText(char)
+            self.insertPlainText(chunk)
             self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
 
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self.viewport())
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        draw_sci_fi_corners(painter, self.rect().adjusted(2, 2, -2, -2), COLOR_ACCENT, bracket_len=10, thickness=1)
+
+
+# =============================================================================
+# MAIN WINDOW: CYPHER F.R.I.D.A.Y. HUD
+# =============================================================================
 class MainWindow(QtWidgets.QMainWindow):
     sig_log = pyqtSignal(str)
     sig_close = pyqtSignal()
@@ -256,44 +740,82 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.resize(1400, 900)
+        self.resize(1440, 920)
         self.setWindowTitle("CYPHER VOICE ASSISTANT")
         self.tech_font = get_font_family("WarriotTechItalic-YqOoa.ttf")
         
         self.last_net = psutil.net_io_counters()
+
+        # Central Root Frame with Sci-Fi Glassmorphism
         central = QtWidgets.QFrame()
         central.setStyleSheet(f"""
-            QFrame {{
+            QFrame#CentralRoot {{
                 background-color: {COLOR_BG};
-                border: 3px solid {COLOR_SEC};
+                border: 2px solid {COLOR_BORDER};
                 border-radius: 20px;
             }}
         """)
+        central.setObjectName("CentralRoot")
         self.setCentralWidget(central)
+
         main_layout = QtWidgets.QVBoxLayout(central)
-        main_layout.setContentsMargins(25, 10, 25, 25)
+        main_layout.setContentsMargins(26, 14, 26, 22)
+        main_layout.setSpacing(10)
 
-        # --- WINDOW CONTROLS ---
+        # ---------------------------------------------------------------------
+        # 1. TOP BAR: STATUS PILL + WINDOW CONTROLS
+        # ---------------------------------------------------------------------
         top_bar = QtWidgets.QHBoxLayout()
-        top_bar.addStretch() 
+        top_bar.setContentsMargins(0, 0, 0, 0)
 
-        # Control Panel Frame
+        # Left: Sci-Fi Security Banner
+        self.lbl_sec_badge = QtWidgets.QLabel("● PROTOCOL: CYPHER-V3 // NEURAL HUD ACTIVE")
+        self.lbl_sec_badge.setStyleSheet(f"""
+            color: {COLOR_ACCENT};
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            border: none;
+            background: transparent;
+        """)
+        top_bar.addWidget(self.lbl_sec_badge)
+        top_bar.addStretch()
+
+        # Center: Animated Holographic Mode Pill
+        self.mode_pill = QtWidgets.QLabel("[ STANDBY ]")
+        self.mode_pill.setStyleSheet(f"""
+            color: {COLOR_ACCENT};
+            background-color: rgba(0, 217, 246, 0.12);
+            border: 1px solid {COLOR_ACCENT};
+            border-radius: 12px;
+            padding: 4px 18px;
+            font-family: 'Consolas', monospace;
+            font-size: 13px;
+            font-weight: bold;
+            letter-spacing: 2px;
+        """)
+        self.mode_pill.setAlignment(Qt.AlignCenter)
+        top_bar.addWidget(self.mode_pill)
+        top_bar.addStretch()
+
+        # Right: Window Control Frame (Minimize & Close)
         control_frame = QtWidgets.QFrame()
-        control_frame.setFixedSize(120, 40)
+        control_frame.setFixedSize(110, 36)
         control_frame.setStyleSheet(f"""
             QFrame {{
-                background-color: rgba(0, 20, 30, 0.8);
-                border: 1px solid {COLOR_SEC};
-                border-radius: 5px;
+                background-color: rgba(0, 20, 35, 0.85);
+                border: 1px solid {COLOR_BORDER};
+                border-radius: 6px;
             }}
         """)
         ctrl_layout = QtWidgets.QHBoxLayout(control_frame)
-        ctrl_layout.setContentsMargins(5, 5, 5, 5)
-        ctrl_layout.setSpacing(5)
+        ctrl_layout.setContentsMargins(4, 3, 4, 3)
+        ctrl_layout.setSpacing(4)
 
         # Minimize Button
         self.btn_min = QtWidgets.QPushButton("─")
-        self.btn_min.setFixedSize(50, 30)
+        self.btn_min.setFixedSize(46, 28)
         self.btn_min.clicked.connect(self.showMinimized)
         self.btn_min.setCursor(Qt.PointingHandCursor)
         self.btn_min.setStyleSheet(f"""
@@ -301,11 +823,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 color: {COLOR_ACCENT};
                 background-color: transparent;
                 border: 1px solid {COLOR_SEC};
-                border-radius: 3px;
-                font-weight: bold; font-size: 14px;
+                border-radius: 4px;
+                font-weight: bold; 
+                font-size: 14px;
             }}
             QPushButton:hover {{
-                background-color: rgba(0, 217, 246, 0.3);
+                background-color: rgba(0, 217, 246, 0.25);
                 border: 1px solid {COLOR_ACCENT};
                 color: #ffffff;
             }}
@@ -313,7 +836,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Close Button
         self.btn_close = QtWidgets.QPushButton("✕")
-        self.btn_close.setFixedSize(50, 30)
+        self.btn_close.setFixedSize(46, 28)
         self.btn_close.clicked.connect(self.close_safely)
         self.btn_close.setCursor(Qt.PointingHandCursor)
         self.btn_close.setStyleSheet(f"""
@@ -321,100 +844,231 @@ class MainWindow(QtWidgets.QMainWindow):
                 color: {COLOR_WARN};
                 background-color: transparent;
                 border: 1px solid {COLOR_WARN};
-                border-radius: 3px;
-                font-weight: bold; font-size: 14px;
+                border-radius: 4px;
+                font-weight: bold; 
+                font-size: 13px;
             }}
             QPushButton:hover {{
                 background-color: {COLOR_WARN};
                 color: #ffffff;
-                border: 1px solid #ff5555;
+                border: 1px solid #ff6666;
             }}
         """)
 
         ctrl_layout.addWidget(self.btn_min)
         ctrl_layout.addWidget(self.btn_close)
-        
         top_bar.addWidget(control_frame)
+
         main_layout.addLayout(top_bar)
 
-        # --- HEADER ---
+        # ---------------------------------------------------------------------
+        # 2. HEADER
+        # ---------------------------------------------------------------------
         header = QtWidgets.QLabel("CYPHER VOICE ASSISTANT")
         header.setAlignment(Qt.AlignCenter)
         header.setStyleSheet(f"""
             color: {COLOR_ACCENT}; 
             font-family: '{self.tech_font}', 'Arial Black'; 
-            font-size: 42px; 
-            letter-spacing: 5px; 
+            font-size: 40px; 
+            letter-spacing: 6px; 
             font-weight: 400; 
             border: none;
+            background: transparent;
             font-style: italic;
         """)
         main_layout.addWidget(header)
         
-        # --- MIDDLE SECTION ---
+        # ---------------------------------------------------------------------
+        # 3. MIDDLE SECTION: DIAGNOSTICS | ARC REACTOR | SYSTEM STATUS
+        # ---------------------------------------------------------------------
         middle_layout = QtWidgets.QHBoxLayout()
-        
+        middle_layout.setSpacing(18)
+
+        # Left HUD: Diagnostics
         self.left_panel = HUDPanel("DIAGNOSTICS", self.tech_font, Qt.AlignLeft)
-        self.left_panel.setFixedWidth(400)
+        self.left_panel.setFixedWidth(390)
+        self.row_net_down = DataStreamRow("NET_DOWN")
+        self.row_net_up   = DataStreamRow("NET_UP")
+        self.gauge_disk   = SegmentedGauge("DISK_USED", self.tech_font)
+        self.row_threads  = DataStreamRow("THRD_CNT")
+        self.row_ai_core  = DataStreamRow("AI_CORE")
+        self.row_v_mod    = DataStreamRow("V_MODULE")
+
+        self.left_panel.content_layout.addWidget(self.row_net_down)
+        self.left_panel.content_layout.addWidget(self.row_net_up)
+        self.left_panel.content_layout.addWidget(self.gauge_disk)
+        self.left_panel.content_layout.addWidget(self.row_threads)
+        self.left_panel.content_layout.addWidget(self.row_ai_core)
+        self.left_panel.content_layout.addWidget(self.row_v_mod)
         
+        # Center: Multi-Ring Arc Reactor
         img_path = os.path.join(os.path.dirname(__file__), "image.png")
         self.core = RotatingCore(img_path)
-
         self.core.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         
+        # Right HUD: System Status
         self.right_panel = HUDPanel("SYSTEM STATUS", self.tech_font, Qt.AlignRight)
-        self.right_panel.setFixedWidth(400)
-        
+        self.right_panel.setFixedWidth(390)
+        self.gauge_cpu    = SegmentedGauge("CPU_LOAD", self.tech_font)
+        self.gauge_ram    = SegmentedGauge("MEM_ALLOC", self.tech_font)
+        self.gauge_bat    = SegmentedGauge("PWR_STATUS", self.tech_font)
+        self.row_net_link = DataStreamRow("NET_LINK")
+        self.row_clock    = DataStreamRow("SYS_CLOCK")
+        self.row_sec      = DataStreamRow("SEC_PROTO")
+
+        self.right_panel.content_layout.addWidget(self.gauge_cpu)
+        self.right_panel.content_layout.addWidget(self.gauge_ram)
+        self.right_panel.content_layout.addWidget(self.gauge_bat)
+        self.right_panel.content_layout.addWidget(self.row_net_link)
+        self.right_panel.content_layout.addWidget(self.row_clock)
+        self.right_panel.content_layout.addWidget(self.row_sec)
+
         middle_layout.addWidget(self.left_panel)
         middle_layout.addWidget(self.core, 1) 
         middle_layout.addWidget(self.right_panel)
-        main_layout.addLayout(middle_layout)
+        main_layout.addLayout(middle_layout, 1)
 
-        # --- BOTTOM SECTION ---
+        # ---------------------------------------------------------------------
+        # 4. SOUND SPECTRUM FREQUENCY VISUALIZER
+        # ---------------------------------------------------------------------
+        self.visualizer = VoiceVisualizer()
+        main_layout.addWidget(self.visualizer)
+
+        # ---------------------------------------------------------------------
+        # 5. BOTTOM SECTION: TERMINAL + ACTION BUTTON
+        # ---------------------------------------------------------------------
         bottom_layout = QtWidgets.QVBoxLayout()
-        lbl_term = QtWidgets.QLabel("COMMAND LINE INTERFACE")
-        lbl_term.setStyleSheet(f"color: {COLOR_SEC}; font-family: '{self.tech_font}'; font-size: 16px; letter-spacing: 2px; border:none; font-style: italic;")
-        bottom_layout.addWidget(lbl_term)
+        bottom_layout.setSpacing(6)
+
+        # Terminal Title Bar
+        term_bar = QtWidgets.QHBoxLayout()
+        lbl_term = QtWidgets.QLabel("COMMAND LINE INTERFACE // SUBSYSTEM LOGS")
+        lbl_term.setStyleSheet(f"""
+            color: {COLOR_SEC}; 
+            font-family: 'Consolas', monospace; 
+            font-size: 13px; 
+            font-weight: bold;
+            letter-spacing: 2px; 
+            border: none;
+            background: transparent;
+        """)
+        term_bar.addWidget(lbl_term)
+        term_bar.addStretch()
+
+        self.lbl_stream = QtWidgets.QLabel("STREAM: ACTIVE ●")
+        self.lbl_stream.setStyleSheet(f"color: {COLOR_ACCENT}; font-family: 'Consolas', monospace; font-size: 11px; font-weight: bold; border: none;")
+        term_bar.addWidget(self.lbl_stream)
+        bottom_layout.addLayout(term_bar)
         
+        # Terminal Box
         self.terminal = TerminalBox()
-        self.terminal.setFixedHeight(220)
+        self.terminal.setFixedHeight(180)
         bottom_layout.addWidget(self.terminal)
         
+        # Action Protocol Button
         self.btn_action = QtWidgets.QPushButton("INITIATE PROTOCOL")
         self.btn_action.setCursor(Qt.PointingHandCursor)
-        self.btn_action.setFixedHeight(65)
+        self.btn_action.setFixedHeight(56)
         self.btn_action.setStyleSheet(f"""
             QPushButton {{
                 background-color: rgba(0, 217, 246, 0.1);
                 color: {COLOR_ACCENT};
                 border: 2px solid {COLOR_ACCENT};
                 font-family: '{self.tech_font}'; 
-                font-size: 24px; 
-                letter-spacing: 2px;
-                border-bottom-left-radius: 15px; 
-                border-bottom-right-radius: 15px;
+                font-size: 22px; 
+                letter-spacing: 3px;
+                border-radius: 12px;
                 font-style: italic;
             }}
-            QPushButton:hover {{ background-color: {COLOR_ACCENT}; color: {COLOR_BG}; }}
+            QPushButton:hover {{ 
+                background-color: {COLOR_ACCENT}; 
+                color: {COLOR_BG}; 
+            }}
         """)
         self.btn_action.clicked.connect(self.toggle_system)
         bottom_layout.addWidget(self.btn_action)
+
         main_layout.addLayout(bottom_layout)
 
-        # --- SIGNALS & LOGIC ---
+        # ---------------------------------------------------------------------
+        # SIGNALS & BACKEND INTEGRATION
+        # ---------------------------------------------------------------------
         self.sig_log.connect(self.terminal.log)
         self.sig_close.connect(self.close_safely)
-        self.sig_state.connect(self.core.set_state)
+        self.sig_state.connect(self.on_state_changed)
         self.cypher = CypherCore()
 
-        # esc
+        # ESC shortcut to halt voice output
         self.esc_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Esc"), self)
         self.esc_shortcut.activated.connect(self.cypher.stop_speaking)
         
+        # Window Draggable Mechanics
         self.oldPos = self.pos()
+
+        # Telemetry Timer (1000ms update rate)
         self.sys_timer = QTimer(self)
         self.sys_timer.timeout.connect(self.update_system_stats)
         self.sys_timer.start(1000) 
+        self.update_system_stats()
+
+    @pyqtSlot(str)
+    def on_state_changed(self, state):
+        """Dispatches state updates to Arc Reactor, Voice Visualizer, and Mode Pill."""
+        self.core.set_state(state)
+        self.visualizer.set_state(state)
+
+        if state == "listening":
+            self.mode_pill.setText("[ LISTENING ]")
+            self.mode_pill.setStyleSheet(f"""
+                color: {COLOR_LISTEN};
+                background-color: rgba(0, 255, 119, 0.15);
+                border: 1px solid {COLOR_LISTEN};
+                border-radius: 12px;
+                padding: 4px 18px;
+                font-family: 'Consolas', monospace;
+                font-size: 13px;
+                font-weight: bold;
+                letter-spacing: 2px;
+            """)
+        elif state == "processing":
+            self.mode_pill.setText("[ PROCESSING ]")
+            self.mode_pill.setStyleSheet(f"""
+                color: {COLOR_PROCESS};
+                background-color: rgba(58, 134, 255, 0.15);
+                border: 1px solid {COLOR_PROCESS};
+                border-radius: 12px;
+                padding: 4px 18px;
+                font-family: 'Consolas', monospace;
+                font-size: 13px;
+                font-weight: bold;
+                letter-spacing: 2px;
+            """)
+        elif state == "speaking":
+            self.mode_pill.setText("[ VOCALIZING ]")
+            self.mode_pill.setStyleSheet(f"""
+                color: {COLOR_SPEAK};
+                background-color: rgba(255, 0, 127, 0.15);
+                border: 1px solid {COLOR_SPEAK};
+                border-radius: 12px;
+                padding: 4px 18px;
+                font-family: 'Consolas', monospace;
+                font-size: 13px;
+                font-weight: bold;
+                letter-spacing: 2px;
+            """)
+        else:
+            self.mode_pill.setText("[ STANDBY ]" if self.core.is_active else "[ READY ]")
+            self.mode_pill.setStyleSheet(f"""
+                color: {COLOR_ACCENT};
+                background-color: rgba(0, 217, 246, 0.12);
+                border: 1px solid {COLOR_ACCENT};
+                border-radius: 12px;
+                padding: 4px 18px;
+                font-family: 'Consolas', monospace;
+                font-size: 13px;
+                font-weight: bold;
+                letter-spacing: 2px;
+            """)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -427,48 +1081,55 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def update_system_stats(self):
         try:
+            # 1. CPU & RAM
             cpu = psutil.cpu_percent()
             ram = psutil.virtual_memory().percent
-            
+            self.gauge_cpu.set_value(cpu)
+            self.gauge_ram.set_value(ram)
+
+            # 2. Battery Status
             battery = psutil.sensors_battery()
             if battery:
-                if battery.power_plugged:
-                    status = "CHARGING" if battery.percent < 100 else "FULLY CHRG"
-                else:
-                    status = "DISCHARGING"
-                bat_str = f"PWR_STATUS :: {battery.percent}% [{status}]"
+                sub = "[CHRG]" if battery.power_plugged else "[DISCHRG]"
+                self.gauge_bat.set_value(battery.percent, sub)
             else:
-                bat_str = "PWR_STATUS :: AC_CONNECTED"
-            
+                self.gauge_bat.set_value(100.0, "[AC_PWR]")
+
+            # 3. Network Link Status
             addrs = psutil.net_if_stats()
             connected = any(nic.isup for nic in addrs.values())
-            net_str = f"NET_LINK  :: {'[ONLINE]' if connected else '[OFFLINE]'}"
-            time_str = f"SYS_CLOCK :: {time.strftime('%H:%M:%S')}"
-            
-            self.right_panel.update_data([f"CPU_LOAD  :: {cpu}%", f"MEM_ALLOC :: {ram}%", bat_str, net_str, time_str, "SEC_PROTO :: ACTIVE"])
+            self.row_net_link.set_data("[ONLINE]" if connected else "[OFFLINE]")
 
+            # 4. System Clock & Security
+            self.row_clock.set_data(time.strftime("%H:%M:%S"))
+            self.row_sec.set_data("ARMED :: ACTIVE")
+
+            # 5. Network Throughput
             curr_net = psutil.net_io_counters()
-            recv_speed = (curr_net.bytes_recv - self.last_net.bytes_recv) / 1024 
-            sent_speed = (curr_net.bytes_sent - self.last_net.bytes_sent) / 1024 
-            self.last_net = curr_net 
+            recv_speed = max(0.0, (curr_net.bytes_recv - self.last_net.bytes_recv) / 1024.0)
+            sent_speed = max(0.0, (curr_net.bytes_sent - self.last_net.bytes_sent) / 1024.0)
+            self.last_net = curr_net
 
+            self.row_net_down.set_data(f"↓ {recv_speed:.1f} KB/s")
+            self.row_net_up.set_data(f"↑ {sent_speed:.1f} KB/s")
+
+            # 6. Disk & Threads
             disk_usage = psutil.disk_usage(os.getcwd()).percent
-            
-            self.left_panel.update_data([
-                f"NET_DOWN  :: {recv_speed:.1f} KB/s",
-                f"NET_UP    :: {sent_speed:.1f} KB/s",
-                f"DISK_USED :: {disk_usage}%",
-                f"THRD_CNT  :: {threading.active_count()}",
-                "AI_CORE   :: " + ("ONLINE" if self.core.is_active else "STANDBY"),
-                "V_MODULE  :: READY"
-            ])
+            self.gauge_disk.set_value(disk_usage)
+            self.row_threads.set_data(f"{threading.active_count()} THREADS")
 
-        except Exception as e:
+            # 7. Core & Voice Module Status
+            self.row_ai_core.set_data("[ONLINE]" if self.core.is_active else "[STANDBY]")
+            self.row_v_mod.set_data("SWARA NEURAL")
+
+        except Exception:
             pass
 
     def toggle_system(self):
-        if not self.core.is_active: self.start_system()
-        else: self.stop_system()
+        if not self.core.is_active: 
+            self.start_system()
+        else: 
+            self.stop_system()
             
     def start_system(self):
         if self.core.is_active: 
@@ -480,9 +1141,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.core.is_active = True
         self.btn_action.setText("TERMINATE SYSTEM")
         self.btn_action.setStyleSheet(f"""
-            background-color: rgba(255, 50, 50, 0.2); color: #ff5555; border: 2px solid #ff5555; 
-            font-family: '{self.tech_font}'; font-size: 24px; letter-spacing: 2px; 
-            border-bottom-left-radius: 15px; border-bottom-right-radius: 15px; font-style: italic;
+            QPushButton {{
+                background-color: rgba(255, 51, 68, 0.2); 
+                color: #ff5566; 
+                border: 2px solid #ff5566; 
+                font-family: '{self.tech_font}'; 
+                font-size: 22px; 
+                letter-spacing: 3px; 
+                border-radius: 12px;
+                font-style: italic;
+            }}
+            QPushButton:hover {{
+                background-color: #ff3344;
+                color: #ffffff;
+            }}
         """)
         
         # Pass callbacks directly to the core instance
@@ -492,20 +1164,32 @@ class MainWindow(QtWidgets.QMainWindow):
             self.update_state_threadsafe
         )
         
+        self.on_state_changed("idle")
         self.update_log_threadsafe("Initializing Neural Network...")
         self.ai_thread = threading.Thread(target=self.run_ai)
         self.ai_thread.daemon = True
         self.ai_thread.start()
 
     def stop_system(self):
-        self.cypher.stop_execution() # Use instance method
+        self.cypher.stop_execution()
         self.core.is_active = False
-        self.core.set_state("idle")
+        self.on_state_changed("idle")
         self.btn_action.setText("INITIATE PROTOCOL")
         self.btn_action.setStyleSheet(f"""
-            background-color: rgba(0, 217, 246, 0.1); color: {COLOR_ACCENT}; border: 2px solid {COLOR_ACCENT}; 
-            font-family: '{self.tech_font}'; font-size: 24px; letter-spacing: 2px; 
-            border-bottom-left-radius: 15px; border-bottom-right-radius: 15px; font-style: italic;
+            QPushButton {{
+                background-color: rgba(0, 217, 246, 0.1); 
+                color: {COLOR_ACCENT}; 
+                border: 2px solid {COLOR_ACCENT}; 
+                font-family: '{self.tech_font}'; 
+                font-size: 22px; 
+                letter-spacing: 3px; 
+                border-radius: 12px;
+                font-style: italic;
+            }}
+            QPushButton:hover {{
+                background-color: {COLOR_ACCENT};
+                color: {COLOR_BG};
+            }}
         """)
         self.terminal.log("System Halted.")
 
@@ -518,7 +1202,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.update_log_threadsafe(f"CRITICAL ERROR: {e}")
 
     def update_log_threadsafe(self, text):
-        # FIX 4: Only allow logs to print if the system is meant to be active
         if self.core.is_active:
             self.sig_log.emit(text)
     
@@ -526,7 +1209,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sig_close.emit()
     
     def update_state_threadsafe(self, state):
-        # FIX 5: Prevent dying background threads from turning the UI back to "listening"
         if self.core.is_active:
             self.sig_state.emit(state)
     
@@ -538,6 +1220,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.terminal.log("Shutdown Sequence Initiated...")
         self.btn_close.setEnabled(False)
         QTimer.singleShot(1000, self.close)
+
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
