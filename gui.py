@@ -19,10 +19,10 @@ COLOR_BG = "#04070c"               # Deep Space Obsidian
 COLOR_PANEL_BG = "rgba(6, 14, 24, 0.78)"  # Frosted Glass Tint
 COLOR_ACCENT = "#00d9f6"           # High-Volt Cyan
 COLOR_ACCENT_DIM = "rgba(0, 217, 246, 0.25)"
-COLOR_SEC = "#005f7f"              # Subdued Cyan
+COLOR_SEC = "#00b4d8"              # Subdued / Secondary Vibrant Cyan
 COLOR_BORDER = "rgba(0, 217, 246, 0.35)"
 COLOR_TEXT = "#ffffff"
-COLOR_TEXT_DIM = "rgba(0, 217, 246, 0.85)"
+COLOR_TEXT_DIM = "#80e8ff"         # Bright Holographic Cyan for telemetry keys & labels
 COLOR_WARN = "#ff3344"             # Neon Red (Shutdown / Alarm)
 
 # Contextual State Colors
@@ -677,7 +677,7 @@ class VoiceVisualizer(QtWidgets.QWidget):
             painter.fillRect(QRectF(bx, cap_y, bar_w, 2), cap_color)
 
         # Header subtext
-        painter.setPen(QtGui.QColor(0, 217, 246, 120))
+        painter.setPen(QtGui.QColor(COLOR_TEXT_DIM))
         font_sub = QtGui.QFont("Consolas", 8, QtGui.QFont.Bold)
         painter.setFont(font_sub)
         painter.drawText(QRectF(12, 4, w - 24, 16), Qt.AlignLeft, "AUDIO FREQUENCY SPECTRUM :: 44.1 kHz")
