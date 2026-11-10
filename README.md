@@ -15,7 +15,7 @@
 
 <br/>
 
-[⬇️ **Download Standalone EXE**](https://github.com/pattanayakpratik/Cypher-AI/releases/download/v3.0.0/Cypher-AI.exe) • [Key Features](#-key-features) • [HUD Showcase](#-hud-visual-gallery) • [Installation](#-installation--quick-start) • [Voice Commands](#-command-matrix) • [Author](#-author--connect)
+[⬇️ **Download Standalone EXE**](https://github.com/pattanayakpratik/Cypher-AI/releases/download/v3.0.1/Cypher-AI.exe) • [Key Features](#-key-features) • [HUD Showcase](#-hud-visual-gallery) • [Installation](#-installation--quick-start) • [Voice Commands](#-command-matrix) • [Author](#-author--connect)
 
 </div>
 
@@ -129,7 +129,7 @@ graph TD
 
 No Python, terminal, or virtual environments required!
 
-1. Download **[`Cypher-AI.exe`](https://github.com/pattanayakpratik/Cypher-AI/releases/download/v3.0.0/Cypher-AI.exe)** from the [Latest Release](https://github.com/pattanayakpratik/Cypher-AI/releases/tag/v3.0.0).
+1. Download **[`Cypher-AI.exe`](https://github.com/pattanayakpratik/Cypher-AI/releases/download/v3.0.1/Cypher-AI.exe)** from the [Latest Release](https://github.com/pattanayakpratik/Cypher-AI/releases/tag/v3.0.1).
 2. Double-click **`Cypher-AI.exe`** to launch the holographic HUD.
 3. On first run, the **Credentials Vault** will prompt you to enter your free Google Gemini API key. Click **"SAVE & APPLY PROTOCOLS"** and Cypher is online!
 

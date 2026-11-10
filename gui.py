@@ -1226,7 +1226,7 @@ class MainWindow(QtWidgets.QMainWindow):
         top_bar.setContentsMargins(0, 0, 0, 0)
 
         # Left: Sci-Fi Security Banner
-        self.lbl_sec_badge = QtWidgets.QLabel("● PROTOCOL: CYPHER-V3 // NEURAL HUD ACTIVE")
+        self.lbl_sec_badge = QtWidgets.QLabel("● PROTOCOL: CYPHER // NEURAL HUD ACTIVE")
         self.lbl_sec_badge.setStyleSheet(f"""
             color: {COLOR_ACCENT};
             font-family: 'Consolas', monospace;
