@@ -15,7 +15,7 @@
 
 <br/>
 
-[⬇️ **Download Standalone EXE**](https://github.com/pattanayakpratik/Cypher-AI/releases/download/v3.0.0/Cypher-AI.exe) • [Key Features](#-key-features) • [HUD Showcase](#-hud-visual-gallery) • [Installation](#-installation--quick-start) • [Voice Commands](#-command-matrix) • [Author](#-author--connect)
+[⬇️ **Download Standalone EXE**](https://github.com/pattanayakpratik/Cypher-AI/releases/download/v3.0.1/Cypher-AI.exe) • [Key Features](#-key-features) • [HUD Showcase](#-hud-visual-gallery) • [Installation](#-installation--quick-start) • [Voice Commands](#-command-matrix) • [Author](#-author--connect)
 
 </div>
 
@@ -53,6 +53,7 @@ Cypher features an interactive, reactive sci-fi interface built on PyQt5 that dy
 * **Contextual State Engine:** Transitions smoothly between `idle` (cyan/blue), `listening` (matrix-green with sonar waves), `processing` (electric-blue vortex), and `speaking` (neon-magenta with vocal pulses).
 * **32-Band Audio Spectrum Equalizer (`VoiceVisualizer`):** Real-time audio frequency visualizer with harmonic sine dynamics and floating white peak caps that realistically decay.
 * **12-Segment LED Telemetry Gauges (`SegmentedGauge`):** Hardware diagnostics for **CPU Load**, **Memory Allocation**, **Battery Status**, and **Disk Storage** with dynamic color warning shifts (Cyan ➔ Amber ➔ Red).
+* **High-Contrast Telemetry Palette:** Crisp icy cyan data stream labels (`#80e8ff`) and vibrant secondary accents (`#00b4d8`) optimized for deep obsidian glassmorphism with verified contrast and high readability.
 * **Cyberpunk Corner Reticles & Terminal:** Framed by HUD corner tech brackets `[ ┏ ┓ ┗ ┛ ]`, a real-time status pill, and a hacker-style terminal log with typewriter animation.
 * **Standalone Credentials Vault (`SettingsDialog`):** Interactive settings modal accessible via `[⚙ CONFIG]` or auto-prompted on first run. End users of the standalone `.exe` can enter their API keys (Gemini, Groq, OpenWeather, NewsData, Email), probe live connections to Google AI Studio, and hot-reload credentials without ever touching code or manually creating a `.env` file.
 
@@ -90,11 +91,15 @@ Cypher-AI/
 ├── chat_memory.json    # Persistent multi-turn dialogue memory
 ├── .env                # API Keys & Secrets (Private)
 ├── font/               # Custom Sci-Fi & Monospace Fonts
+├── tests/              # Automated unit test suite (Palette, Contrast & Core Helpers)
+│   ├── test_core_helpers.py
+│   └── test_gui_palette.py
 └── screenshots/        # High-resolution HUD state captures
     ├── cypher_gui_idle.png
     ├── cypher_gui_listening.png
     ├── cypher_gui_processing.png
-    └── cypher_gui_speaking.png
+    ├── cypher_gui_speaking.png
+    └── cypher_settings_dialog.png
 ```
 
 ```mermaid
@@ -124,7 +129,7 @@ graph TD
 
 No Python, terminal, or virtual environments required!
 
-1. Download **[`Cypher-AI.exe`](https://github.com/pattanayakpratik/Cypher-AI/releases/download/v3.0.0/Cypher-AI.exe)** from the [Latest Release](https://github.com/pattanayakpratik/Cypher-AI/releases/tag/v3.0.0).
+1. Download **[`Cypher-AI.exe`](https://github.com/pattanayakpratik/Cypher-AI/releases/download/v3.0.1/Cypher-AI.exe)** from the [Latest Release](https://github.com/pattanayakpratik/Cypher-AI/releases/tag/v3.0.1).
 2. Double-click **`Cypher-AI.exe`** to launch the holographic HUD.
 3. On first run, the **Credentials Vault** will prompt you to enter your free Google Gemini API key. Click **"SAVE & APPLY PROTOCOLS"** and Cypher is online!
 
@@ -164,6 +169,9 @@ Create a `.env` file in the root directory:
 # Google Gemini AI Key (Get from https://aistudio.google.com/)
 GEMINI_API_KEY=your_gemini_api_key_here
 
+# Groq Cloud API Key (Optional high-speed inference fallback)
+GROQ_API_KEY=your_groq_api_key_here
+
 # Weather & News APIs
 OPENWEATHER_KEY=your_openweather_api_key
 NEWS_API_KEY=your_newsdata_api_key
@@ -179,6 +187,14 @@ Start the holographic interface (which automatically initializes the voice engin
 
 ```bash
 python gui.py
+```
+
+#### 6. Run Automated Tests
+
+Execute the automated test harness to verify UI contrast palettes, paths, and core subsystems:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
 ```
 
 ---
@@ -206,6 +222,8 @@ python gui.py
 - [x] 32-band real-time audio spectrum frequency visualizer
 - [x] 12-segment illuminated LED telemetry meters for system diagnostics
 - [x] Native 4-state visual sync (Idle, Listening, Processing, Speaking)
+- [x] High-contrast holographic telemetry HUD palette with verified WCAG readability
+- [x] Automated unit test harness for contrast validation and path resolution
 - [ ] Multimodal Screen Vision via Gemini 1.5 Pro / Flash Vision
 - [ ] Offline wake-word detection via Picovoice Porcupine
 - [ ] Direct Spotify IPC playback integration
